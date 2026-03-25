@@ -4,6 +4,8 @@ Classical Approach - Multi-Agent approach - compare them and analize which one i
 
 Expected a 'Transit anomaly report' with results of analysis.
 
+ANOMALY MEANINGS - PARALLEL OR ML AND USE THE OUYTPUT TO AGENT AI?
+
 ## *README.md –  A) Introduction*
 
 This project investigates two alternative approaches for transit anomaly detection in airport and border-control data: a classical machine learning pipeline and a multi-agent architecture. The main objective is to implement the same anomaly detection system twice and then compare the two solutions in order to understand which approach is more suitable under different operational conditions.
@@ -20,11 +22,21 @@ Understand which kind of anomaly is required; most probably `route + gate + mont
 
 #### 2. Dataset analysis
 
+Translating columns
+
 Columns, granularity of data, n. record, time dimesion, Csv, Categorical variable with high cardinality, alert columns.
 
 ## *EDA.py*
 
 Dataset shape, variable type, missing values, cat. cardinality, distribution, time analysis.
+
+Graph of cardinality - A
+
+ANNO_PARTENZA analysis - G
+
+comment on motivo allarmi - G
+
+secure redundant columns - G
 
 EDA must be the same for same approach.
 
