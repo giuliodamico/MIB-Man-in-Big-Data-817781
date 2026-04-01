@@ -38,7 +38,19 @@ comment on motivo allarmi - G
 
 secure redundant columns - G
 
-EDA must be the same for same approach.
+What G-A has done in Travelers Dataset :
+Listing all columns with missing values : Nationality, document_type, gender, airline, flight_number, control_outcome, operator note, risk code
+
+Check cardinality for all columns to be sure that it's correct and clean
+
+Check redundant columns to fix missing value easily
+=> Column that we keep : Typo documento (instead of document type); Fascia Eta (instead of age_group); nationality_3 (instead of nationality); flight number (instead of flight_number); airline% (instead of airline) 
+
+Fixing missing values for columns needed
+
+Standardization of date colums
+
+EDA must be the same for both approach.
 
 #### 3. Draft of both pipeline
 
