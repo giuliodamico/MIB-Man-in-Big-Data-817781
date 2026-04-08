@@ -87,3 +87,65 @@ When the classic baseline works, we can “agentize” it:
 * Agent write final report with natural language.
 
 #### ...
+#### Feature engineering done by G-A
+Project Update: Data Pipeline & Anomaly Detection MVP
+We have successfully completed the end-to-end data preparation and trained our first Machine Learning Proof of Concept (POC) for anomaly detection. Here is the structured breakdown of the pipeline we built:
+
+1. Data Cleaning & Rich Aggregation
+Missing Values Handled: Executed a "brutal but effective" cleaning phase (median imputation for numbers, dropping rows with missing critical dates, dropping unusable text columns like operator_notes).
+
+The "Rich Pivot" Aggregation: To avoid the "Cartesian Product" trap (which would artificially multiply passenger volumes during the merge), we aggregated the ALARMS dataset to a daily level per airport.
+
+Preserving Signal: Instead of just doing a raw count of alarms, we used One-Hot Encoding before aggregating. This allowed us to keep critical business intelligence (like RISK_FLAG_HIGH and ALARM_REASON) while keeping the math safe for the ML algorithm. We then successfully merged TRAVELERS and ALARMS into a single, robust df_master.
+
+2. Feature Engineering (Building the Baselines)
+We moved from raw data to intelligent context. To help the algorithm understand what "normal" looks like, we engineered new features:
+
+traffic_multiplier (Volume Baseline): Measures if today's passenger volume is unusually high or low compared to the airport's historical average.
+
+rate_deviation (Risk Baseline): Measures how far today's alarm rate deviates from the usual alarm rate for that specific airport.
+
+rolling_7d_avg_rate (Time Series Baseline): Captures the recent trend over the last 7 days to give the model temporal awareness.
+
+Temporal Context: Added simple flags like is_weekend.
+
+3. Dimensionality Reduction
+To avoid the "Curse of Dimensionality" and multicollinearity (which blinds the model), we aggressively filtered our 48 available columns down to the 7 most mathematically informative features. We removed all raw IDs, text, and overlapping metrics.
+
+4. Machine Learning: Unsupervised Anomaly Detection
+Primary Model (Isolation Forest): We deployed an Isolation Forest to isolate the top 3% most abnormal flights based on the engineered baselines. It successfully flagged events with extreme combinations (e.g., extremely low passenger volume but massive alarm spikes).
+
+Model Validation (LOF): To prove the robustness of our pipeline, we ran a second algorithm, Local Outlier Factor (LOF).
+
+The Consensus: We cross-referenced both models and found 12 undeniable anomalies that were flagged by both AIs.
+
+
+### Question for Q&A
+Questions for the Data Provider (Business & Operations)
+1. The "Entries vs. Alarms" Dilemma (Data Quality vs. True Risk)
+
+"In our dataset, we found instances where the number of daily alarms far exceeded the number of passengers (e.g., 20 alarms for 1 passenger). Should we treat this strictly as a data entry error and clean it out, or is it a valid operational scenario where a single high-risk individual triggers multiple independent database alerts?"
+
+2. Time Series Seasonality
+
+"To give the algorithm temporal context, we built a 7-day rolling average baseline. Based on real-world border control operations, is a weekly cycle the most accurate reflection of traffic patterns, or should we look at monthly or seasonal cycles instead?"
+
+3. Defining "Actionability"
+
+"Our Machine Learning models successfully flagged a top list of highly anomalous days. From an operational standpoint, how would your team ideally consume this information? Do you need a daily automated dashboard, or retroactive monthly audits to spot systemic issues?"
+
+Questions for the TA (Methodology & Machine Learning)
+1. Validating Unsupervised Models
+
+"Since we do not have labeled data to measure accuracy or recall, we used a 'Consensus Approach'—running both Isolation Forest and Local Outlier Factor (LOF) and focusing on the events flagged by both. Do you agree with this validation strategy for an MVP, or is there another unsupervised evaluation metric you prefer?"
+
+2. Feature Selection & The Curse of Dimensionality
+
+"To avoid the curse of dimensionality with the Isolation Forest, we aggressively reduced 48 raw columns down to 5-7 engineered baselines (traffic multipliers, rate deviations, risk scores). Are you satisfied with this level of dimensionality reduction, or do you think we aggregated away too much granular signal?"
+
+3. Target Encoding for Categorical Data
+
+"To include 'Nationality' without exploding the dataset with One-Hot Encoding (which Isolation Forest handles poorly), we used Target Encoding to replace countries with their 'Historical Risk Score'. Is this considered a best practice for this specific algorithm in your experience?"
+
+### strategy for AI agent
+For the multi-agent architecture on n8n, our strategy is to leverage the existing Python pipeline. The LLM agents will not perform data cleaning or heavy mathematical computations, as this leads to hallucinations and is computationally expensive. Instead, we will provide our df_master dataset (which already contains the mathematical deviation scores) to the n8n agents. > The Agents’ mission will be purely analytical: Agent 1 will read the deviations, Agent 2 will apply business rules to prioritize risks, and Agent 3 will generate the final report in natural language for field teams. Do you agree with this separation of roles between Python (mathematics) and LLMs (cognitive reasoning)?
