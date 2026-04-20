@@ -65,7 +65,7 @@ except ImportError:
     display = print
 import missingno as msno
 
-from config import (
+from Old.config import (
     RAW_FILES, SNAPSHOT_DATE,
     NAVY, STEEL, CORAL, GREEN, PALETTE,
     manual_mapping, it_to_en, city_mapping, iata_mapping
