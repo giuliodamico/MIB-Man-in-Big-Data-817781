@@ -1,840 +1,385 @@
-# MIB-Man-in-Big-Data
+# Transit Anomaly Detection — Classical vs Multi-Agent
 
-Team members: Giulio D'Amico - Alexis Mitracos - Marco Astrologo
+**Whitehall Reply — Project 2 · Academic Year 2025/26**
+**Team:** Giulio D'Amico · Alexis Mitracos
+**Captain:** Giulio D'Amico
 
-## Reply Project: Classical vs Multi Agents
+---
 
-This project investigates two alternative approaches for transit anomaly detection in airport and border-control data: a classical machine learning pipeline and a multi-agent architecture. The main objective is to implement the same anomaly detection system twice and then compare the two solutions in order to understand which approach is more suitable under different operational conditions.
+## Introduction
 
-The application scenario is motivated by the need to move from reactive anomaly detection to a more proactive analytical system. Border control authorities and airport operators manage large volumes of passenger transit data every day, including information such as timestamps, gates, routes, nationality, document type, control outcomes, and security alerts. In this context, identifying unusual patterns early can help prevent operational issues and support security monitoring.
+Border-control authorities and airport operators process thousands of passenger transits every day, each carrying rich metadata: timestamp, gate, route, nationality, document type, control outcome, and security alerts. Anomaly detection on this stream is today largely **reactive** — incidents are reviewed after the fact rather than flagged as patterns emerge. A proactive analytical layer that surfaces suspicious patterns *before* they escalate into operational risks would meaningfully improve both security monitoring and resource allocation.
 
-In the classical implementation, anomaly detection is performed through a structured pipeline including data preparation, feature engineering, historical baseline construction, anomaly detection algorithms, and rule-based post-processing. In the multi-agent implementation, the same logic is distributed across specialized agents, each responsible for a specific task such as querying data, building historical baselines, detecting outliers, applying risk rules, and generating a final report.
+This project addresses that gap by **implementing the same anomaly-detection system twice** under two paradigms — a classical statistical pipeline and a multi-agent architecture — and producing a comparative analysis to argue  **which approach is preferable under which operational conditions** .
 
-The goal of the project is not only to detect anomalies, but also to provide a comparative analysis of the two paradigms in terms of modularity, interpretability, scalability, flexibility, and practical usability. The final output is a transit anomaly report highlighting suspicious patterns and supporting the discussion on the advantages and limitations of each approach.
+The classical pipeline is a deterministic statistical workflow: cleaning, feature engineering at route level, an ensemble of four unsupervised detectors (Isolation Forest, Local Outlier Factor, DBSCAN, robust Z-score), and a rule-based post-processing layer that ranks the consensus anomalies by a confidence-weighted priority score.
 
-```markdown
-### Data Dictionary (Italian Customs & Aviation Terminology)
+The multi-agent pipeline distributes the same logic across five specialist agents — Data Agent, Baseline Agent, Outlier Detection Agent, Risk Profiling Agent, Report Agent — orchestrated by  **LangGraph** . The numerical core is shared with the classical pipeline through a single `utils.py` module, so any divergence between the two outputs reflects architectural behaviour rather than algorithmic drift. A local LLM (`llama3.2:3b` served via Ollama) is invoked at exactly two points: parsing free-text user requests into a structured perimeter, and writing one short interpretation paragraph on top of the deterministic facts of the report.
 
-**1. Temporal Features (Time & Date).**  
-`DATA_PARTENZA`: Departure Date (Full timestamp).  
-`ANNO_PARTENZA` / `MESE_PARTENZA` / `GIORNO_PARTENZA`: Year / Month / Day of departure.
+The deliverable is  **not a winner declaration** . The two pipelines solve the same problem under different operational constraints — the comparison in §3–4 quantifies the trade-off and concludes with a decision matrix.
 
-**2. Geographical & Airport Features.**  
-`AREOPORTO_PARTENZA` / `AREOPORTO_ARRIVO`: Departure / Arrival Airport Code (e.g., FCO, JFK).  
-`DESCR_AEREOPORTO_...`: Full Airport Name (e.g., Fiumicino, John F Kennedy).  
-`CITTA_PARTENZA` / `CITTA_ARR`: Departure / Arrival City.  
-`PAESE_PART` / `PAESE_ARR`: Departure / Arrival Country.  
-`CODICE_PAESE_...`: Country Code (e.g., ITA, USA).  
-`ZONA` / `3zona`: Geographical routing zone.  
+---
 
-**3. Flight & Airline Info**  
-`COMPAGNIA_AEREA` / `compagnia%aerea`: Airline Name.  
-`NUMERO_VOLO` / `num volo`: Flight Number.  
-`FLAG_TRANSITO`: Indicates if it's a transit flight (Connecting flight).  
+## Methods
 
-**4. Passenger Demographics (Travelers Dataset).**  
-`NAZIONALITA` / `3nazionalita`: Passenger Nationality.  
-`GENERE`: Gender.  
-`FASCIA_ETA` / `FASCIA ETA`: Age Group (e.g., 18-30).  
-`TIPO_DOCUMENTO` / `Tipo Documento`: Document used (Passport, ID Card).  
+### 2.1 Data sources
 
-**5. Quantitative Metrics (The Numbers)**  
-`TOT` / `tot voli`: Number of alarms for a specific occurenzi.   
-`ENTRATI`: Total number of passengers who *entered* the system/country.  
-`INVESTIGATI`: Number of passengers *investigated* (Level 1 check).  
-`ALLARMATI`: Number of passengers flagged with an *alarm* (Level 2 check/Anomaly).  
+Two CSV files were provided by the client, both extracted from Italian airport border-control operations.
 
-**6. Customs & Risk Assessment (The Labels)**  
-`OCCORRENZE`: Type of event/occurrence recorded.  
-`MOTIVO_ALLARME`: Reason for the alarm/flag. (who has raised the alarm).  
-`ESITO_CONTROLLO`: Outcome of the inspection (e.g., Cleared, Rejected, Arrested).  
-`codice_rischio` / `flag_rischio`: Risk code/flag (mostly missing data, >98% NaNs).  
-`note_operatore`: Customs operator's manual notes (mostly missing data, >98% NaNs).  
+| Dataset                   |  Rows | Cols | Observation unit                                                 |
+| ------------------------- | ----: | ---: | ---------------------------------------------------------------- |
+| `TIPOLOGIA_VIAGGIATORE` | 5,095 |   33 | Daily traveler-category aggregates per departure airport         |
+| `ALLARMI`               | 5,080 |   24 | Alarm-event aggregates per (airport × month × occurrence type) |
+
+Both files arrived in Italian with mixed casing, typographic errors (`AREOPORTO` instead of `AEROPORTO`), six different date formats, and several encodings of the same logical column (`Tipo_Documento` vs `TIPO_DOCUMENTO`, `ZONE` vs `ZONE_3`, etc.). The cleaning section addresses these systematically.
+
+### 2.2 Shared analytical core (`utils.py`)
+
+A single module contains the cleaning, feature engineering, detection, and post-processing logic. **Both notebooks import from this module** — no business logic is duplicated. This is a deliberate design choice: it guarantees by construction that any difference in the §4 results comes from the multi-agent layer (perimeter parsing, LLM interpretation, audit log) and not from cleaning drift.
+
+The module exposes:
+
+* `load_clean_data()` — single I/O entry point, returns `(df_alarms, df_travelers)`.
+* `build_route_master(df_alarms, df_travelers)` — aggregates both tables at the `(departure × arrival)` route level.
+* `build_feature_matrix(df_route)` — `log1p` + `StandardScaler` over the engineered numeric features.
+* `fit_detectors(X_scaled, contamination)` — runs the four detectors and returns per-row labels + consensus votes.
+* `apply_post_processing(df_scored)` — assigns risk levels, Wilson CI, priority score, and **quality filter** consistently across both pipelines.
+
+### 2.3 Cleaning pipeline
+
+Cleaning is documented step by step in `Classical_approach.ipynb` §2; here we summarise the design choices.
+
+**Italian → English column normalisation.** A curated `COL_MAP` dictionary translates 40+ column names. Headers are then upper-cased and stripped.
+
+**Placeholder unification.** A controlled vocabulary (`N.D.`, `??`, `//`, `-`, `unknown`, `xx`, `zz`, etc.) is mapped to NaN before any imputation. Free-text columns receive explicit placeholders (`NO REASON PROVIDED`, `NO MANUAL NOTES`) to preserve row count and categorical usability.
+
+**Date parsing.** Six format variants are detected and parsed using `format='mixed'` with a fallback pass to capture remaining edge cases.
+
+**IATA enrichment and country mapping.** A curated `IATA_MAPPING` (≈ 80 codes) back-fills missing city/airport descriptions where the IATA code is populated. Italian country names are mapped to ISO alpha-3 via `IT_TO_ALPHA3` plus `pycountry`. Kosovo (no official ISO) is hand-coded as `RKS`.
+
+**Signal-column cap at `[0, SIGNAL_CAP=200]`.** The `ENTRIES`, `INVESTIGATED`, and `ALARMS` columns contain typing artefacts (`"1 pax"`, `"~5"`, free-text leakage). The cut-off was chosen empirically — see §3.1 and the histogram in `Classical_approach.ipynb` §2.2.5: the p99.5 of the raw distribution falls between 150 and 180, the cap at 200 retains > 99.5% of legitimate observations and removes only values that exhibit other parsing artefacts.
+
+![Descrizione immagine](src/images/capping.png)
+
+### 2.4 Feature engineering at route level
+
+The cleaned tables are aggregated to one row per `(departure_iata, arrival_iata)` route. Three groups of features are built:
+
+* **Volume features** : `tot_entries`, `tot_investigated`, `tot_alarms`, plus pivoted occurrence counts (`tot_<occurrence_type>`).
+* **Rate features** : `alert_rate = alarms / investigated` (capped at 1.0), `investigation_rate = investigated / entries`, plus segmented rates per top-3 nationalities, top-3 document types, and top-4 control outcomes — these introduce horizontal information that single global rates would hide.
+* **Risk features** : `n_high_risk`, `n_medium_risk` from the alarm-level `RISK_FLAG`.
+
+The numeric matrix is transformed with `log1p` (count features have heavy right tails) and standardised with `StandardScaler` before detection.
+
+![ ](src/images/PCA_distribution.png)
+
+### 2.5 Anomaly detection ensemble
+
+Four detectors with **deliberately different inductive biases** vote on each route. A route is flagged as a **consensus anomaly** if at least 2 of the 4 detectors agree.
+
+| Detector         | Inductive bias                | Hyperparameters                                                    |
+| ---------------- | ----------------------------- | ------------------------------------------------------------------ |
+| Isolation Forest | Global random partitioning    | `n_estimators=200`,`contamination=0.05`                        |
+| LOF              | Local density vs neighbours   | `n_neighbors = max(2, min(20, n-1))`                             |
+| DBSCAN           | Density connectivity          | `min_samples = max(5, ⌈ln(n)⌉ + 1)`,`eps`from k-distance p95 |
+| Robust Z-score   | Per-feature tail (median+MAD) | `\|z\| > 3`after median-MAD standardisation                        |
+
+Two design choices deserve a note.
+
+**DBSCAN `min_samples`.** The textbook rule `min_samples = 2 · d` (Sander et al.) assumes moderate dimensionality. With *d* ≈ 30+ engineered features on ≈ 1 100 routes, that rule labelled almost every point as noise (curse of dimensionality on density estimates). The high-dimensional practical rule `max(5, ⌈ln(n)⌉ + 1)` brings the noise rate from ~75% to a meaningful ~1.5%, which is the operational target — DBSCAN should isolate a small number of structurally distant points, not partition the dataset.
+
+**Robust Z-score.** Plain `(x − mean) / std` on the standardised matrix flagged ~20% of all routes (215 / ≈ 1 100), dominating the consensus vote by construction. The detector was replaced with a robust variant — `(x − median) / MAD` — which restores the intended semantics of "rare per-feature tail event" and brings the Z-flag count to a plausible ≈ 60–90 routes. The four detectors are now genuinely complementary.
+
+![ ](src/images/contamination.png)
+
+### 2.6 Post-processing and risk ranking
+
+Consensus routes (≥ 2/4 detectors agreeing) go through a deterministic ranking layer.
+
+**Risk levels** are assigned by a rule cascade based on alert rate, investigated volume, and number of detector votes:
+
+```
+CRITICAL  ←  votes == 4
+HIGH      ←  alert_rate ≥ T_HIGH ∧ tot_investigated ≥ T_VOL
+HIGH      ←  votes ≥ 3 ∧ alert_rate ≥ pop_median
+MEDIUM    ←  alert_rate ≥ T_MED ∨ votes ≥ 3
+LOW       ←  otherwise
 ```
 
+where `T_HIGH = max(3 × pop_median, p66_post)`, `T_MED = max(1.5 × pop_median, p33_post)`, `T_VOL = max(2, p25_post_volume)`.
 
-# Transit Anomaly Detection — Whitehall Reply Project 2
-**Whitehall Reply — Project 2 | Academic Year 2025/26**
-**Team: Giulio D'Amico · Alexis Mitracos**
+**Wilson 95% confidence intervals** on the alert rate guard against false positives on tiny volumes. A 100% rate measured on 1 investigated transit is very different from 100% on 50 — the CI half-width captures this.
 
-## Project Overview
-Border control authorities and airport operators process thousands of passenger
-transits daily, each associated with rich metadata: timestamps, routes,
-nationalities, document types, control outcomes, and security alerts. Today,
-anomaly detection on such data is largely reactive — incidents are identified
-after the fact rather than flagged as they emerge. A proactive analytical
-system capable of identifying suspicious patterns in real time would
-meaningfully improve both operational efficiency and security monitoring.
+**Priority score** ranks the consensus list:
 
-This project addresses that gap by implementing the same anomaly detection
-system twice, under two distinct paradigms, and producing a rigorous
-comparative analysis of the results.
-
-The **classical pipeline** follows a structured, deterministic workflow:
-raw data is cleaned and merged, features are engineered from historical
-baselines, three unsupervised detectors (Isolation Forest, Local Outlier
-Factor, Z-score) are applied in ensemble, and a rule-based post-processing
-layer confirms final anomalies. Every step is reproducible and auditable.
-
-The **multi-agent architecture** distributes the same logic across five
-specialised LangGraph agents — Data Agent, Baseline Agent, Outlier Detection
-Agent, Risk Profiling Agent, and Report Agent — each responsible for a
-discrete analytical task. Three of the five agents incorporate a local LLM
-(Gemma via LM Studio) to interpret intermediate results, prioritise findings,
-and generate a structured natural-language report. A shared set of global
-safety rules is prepended to every LLM prompt to enforce factual accuracy
-and operational neutrality across all agents.
-
-The objective is not simply to detect anomalies, but to understand under
-which operational conditions each paradigm is preferable — comparing the
-two approaches across dimensions of modularity, interpretability,
-flexibility, scalability, and practical deployability. The Jaccard similarity
-between the anomaly sets produced by both pipelines serves as the primary
-quantitative validation metric.
-
-## Dataset
-## 1. Dataset Description
-
-### 1.1 Overview
-
-The project uses two datasets provided by the client, both derived from
-Italian airport border-control operations. They describe two complementary
-observation units and share a subset of join keys.
-
-| Dataset | Rows | Columns | Observation unit |
-|---------|------|---------|-----------------|
-| TIPOLOGIA_VIAGGIATORE | 5,095 | 33 | Traveler-category daily aggregates per airport |
-| ALLARMI | 5,080 | 25 | Alarm events per flight and departure airport |
-
-Both files were delivered in Italian with inconsistent casing, typographic
-errors (e.g. `AREOPORTO`), and a mixture of Italianised and English spellings
-for countries, cities, and airports.
-
----
-
-### 1.2 Reference Mappings
-
-Before loading the raw files, four curated dictionaries were prepared to
-support the cleaning pipeline:
-
-- `manual_mapping` — Italian to English column-name mapping. Disambiguates
-  duplicated columns (e.g. `Tipo_Documento` and `TIPO_DOCUMENTO` become
-  `document_type` and `document_type2`) that are reconciled in the cleaning
-  section.
-- `it_to_en` — Italian to English country names, consumed by `pycountry`
-  to emit the ISO alpha-3 code of every departure country. Kosovo, which
-  has no official ISO code, is hand-coded as `RKS`.
-- `city_mapping` — Italianised city names mapped to their canonical English
-  spelling.
-- `iata_mapping` — a curated `IATA → {city, airport}` lookup used to
-  back-fill missing city and airport descriptions when the IATA code is
-  populated but the free-text fields are not.
-- `occurrences_map` — maps the categorical labels in the ALLARMI
-  `OCCURRENCES` column (e.g. `"Voli con Allarmi"`, `"Viaggiatori entrati
-  nel Sistema"`) to a clean controlled English vocabulary.
-
-All dictionaries are embedded directly in the notebook to keep it fully
-self-contained, as required by the submission guidelines.
-
----
-
-### 1.3 Raw Data Loading
-
-Both CSVs are loaded and the Italian-to-English column rename is applied
-in a single step. The two DataFrames (`df_alarms`, `df_travelers`) are
-kept separate throughout the cleaning phase because they describe different
-observation units and share only a subset of columns. They are merged into
-a single master dataset only after cleaning is complete.
-
----
-
-### 1.4 Missing Value Analysis
-
-The audit reveals that both datasets are largely complete, with missing
-values concentrated in a small number of columns.
-
-In **TIPOLOGIA_VIAGGIATORE**, the columns with missing values are:
-NATIONALITY (2.28%), DOCUMENT_TYPE (1.22%), GENDER (0.88%), AIRLINE (1.71%),
-FLIGHT_NUMBER (1.37%), CONTROL_OUTCOME (25.3%), OPERATOR_NOTES (98.8%),and RISK_CODE (99.2%).
-
-In **ALLARMI**, the columns with missing values are: DEPARTURE_AIRPORT_
-DESCRIPTION (2.15%), DEPARTURE_CITY (1.99%), DEPARTURE_COUNTRY (1.46%),
-DEPARTURE_COUNTRY_CODE (1.06%), ALARM_REASON (22.8%), OPERATOR_NOTES
-(98.5%), and RISK_FLAG (99.0%).
-
-> 📊 *Missing value bar charts for both datasets are available in
-> sections 2.1 of the notebook.*
-
-The handling strategy for each column is addressed in the cleaning
-section that follows.
-
----
-
-### 1.5 Cardinality and Data Quality Audit
-
-To go beyond the binary present/missing view, a categorical cardinality
-inspection was performed on all columns in both datasets. Columns were
-split into two buckets: low-cardinality (≤ 400 unique values, amenable
-to visual inspection and rule-based cleanup) and high-cardinality (> 400,
-requiring grouping or encoding). Cardinality above 15 was flagged as a
-soft threshold for downstream one-hot encoding caution.
-
-This inspection revealed data quality issues well beyond what the missing
-value analysis alone captured. Columns officially showing 0% missing are
-in fact dirty: numeric fields like `ENTRIES`, `ALARMS`, and `TOTAL`
-contain strings such as `"1 pax"`, `"~5"`, `"N.D."`, `"-500"`, and
-`"0,0"`, making them unusable as-is. Categorical fields like `GENDER`,
-`NATIONALITY`, `DEPARTURE_AIRPORT_IATA`, and `AIRLINE` suffer from severe
-inconsistency — mixed case (`"TIA"`, `"Tia"`, `"tia"`), trailing spaces,
-and multiple representations of unknown values (`"-"`, `"//"`, `"?"`,
-`"ND"`, `"N.D."`, `"unknown"`).
-
-These findings motivated the targeted multi-step cleaning strategy
-described in the following section.
-
-## 2. Data Cleaning
-
-### 2.1 TIPOLOGIA_VIAGGIATORE — Cleaning Steps
-
-#### 2.1.1 Redundant Column Resolution
-
-The Travelers dataset ships with duplicated columns encoding the same logical
-field under different formats — `document_type` vs `document_type2`,
-`flight_number` vs `flight number`, `nationality` vs `nationality_3`. For
-each pair, conflicting rows (both non-null but different after normalisation)
-were quantified before merging. The more complete or normalised column was
-retained as the canonical source, with the legacy column used only to fill
-remaining gaps before being dropped.
-
-#### 2.1.2 Text Standardisation and Unknown-Value Unification
-
-Three passes were applied to every text column. First, `strip + UPPERCASE`
-to collapse casing and whitespace variants. Second, all unknown tokens
-(`ND`, `UNKNOWN`, `N/A`, `n.d.`) were mapped to the canonical `N.D.` to
-preserve them as informative categoricals rather than converting them to
-NaN. Third, junk tokens (`-`, `//`, `?`, `XX`) were converted to proper
-NaN so downstream imputation logic can handle them correctly.
-
-#### 2.1.3 Numeric and Domain-Specific Standardisation
-
-Numeric columns arrived mixed with unit suffixes (`PAX`), Italian decimal
-commas, and illegal sentinel values. Four sub-steps were applied.
-
-- **Year and month recoding** — Italian 2-digit years and month
-  abbreviations were normalised. Country codes were aligned (`IT` → `ITA`).
-- **Entry counts** — `entries`, `investigated`, `alarms`: decimal commas
-  replaced with dots, non-numeric characters stripped, values clipped to
-  `[0, 1000]`, and cast to pandas nullable `Int64`.
-- **Zone** — cleaned to integer in `[0, 10]`, out-of-range values
-  nullified.
-- **Gender** — numeric codes (`1`/`2`), Italian variants (`MASCHIO`,
-  `FEMMINA`), and English variants collapsed to canonical `M / F / X`.
-
----
-
-### 2.2 ALLARMI — Cleaning Steps
-
-#### 2.2.1 Redundant Column Resolution
-
-Two pairs of columns encoded the same logical field. `TOTAL` and
-`TOTAL_FLIGHTS` both counted total flights — `TOTAL_FLIGHTS` was retained.
-`ZONE` and `ZONE_3` both encoded the risk zone — values were merged via
-`combine_first` before dropping `ZONE_3`. Conflicting rows were quantified
-before each merge. All column names were uppercased to align with the
-Travelers convention.
-
-#### 2.2.2 Derived Columns Removed
-
-`DEPARTURE_MONTH` and `DEPARTURE_YEAR` were dropped as both are derivable
-from `DEPARTURE_DATE`, which becomes the single authoritative temporal
-reference.
-
-#### 2.2.3 Text Standardisation and Unknown-Value Unification
-
-The same three-pass strategy was applied. UPPERCASE for codes and
-identifiers, Title Case for city and country descriptors. Unknown tokens
-replaced with NaN. Free-text columns (`ALARM_REASON`, `OPERATOR_NOTES`)
-received explicit placeholders (`NO REASON PROVIDED`, `NO MANUAL NOTES`)
-rather than NaN to preserve row count and categorical usability.
-
-#### 2.2.4 Domain-Specific Standardisation
-
-- **IATA codes** — uppercased and stripped for consistent merge key matching.
-- **Redundant arrival columns** — `ARRIVAL_COUNTRY_CODE` and
-  `ARRIVAL_COUNTRY_CODE_PERCENTAGE` dropped since all flights arrive in Italy.
-- **ZONE** — sentinel values (`-1`, `99`, `??`) nullified, cast to integer,
-  gaps filled from `ZONE_3`.
-- **RISK_FLAG** — Italian labels translated (`ALTO` → `HIGH RISK`,
-  `MEDIO` → `MEDIUM RISK`), NaN filled with `LOW RISK`.
-- **Country enrichment** — `DEPARTURE_COUNTRY_FULL` (0 nulls) used to
-  derive missing `DEPARTURE_COUNTRY_CODE` via `pycountry` ISO alpha-3
-  mapping, reducing nulls from 102 to 3.
-- **City and airport** — gaps filled from IATA mapping dictionary,
-  reducing city nulls to 4 and airport nulls to 1.
-- **TOTAL_FLIGHTS** — suffixes (`"1 voli"`), approximation markers (`"~5"`)
-  stripped, values cast to integers capped at 1,000. `TOTAL` dropped.
-- **Date parsing** — six mixed formats detected and normalised to ISO 8601
-  using a pattern fingerprint technique. Italian month abbreviations
-  (`GEN`, `FEB`) translated before final parsing.
-
-#### 2.2.5 Cleaning Results Summary
-
-| Step | Outcome |
-|------|---------|
-| Redundant columns | `TOTAL` and `ZONE_3` dropped after merge |
-| OCCURRENCES | 15 clean categories, 3 NaN remaining |
-| ZONE | 9 valid zones retained, sentinel values nullified |
-| ALARM_REASON | 6 categories, `NO REASON PROVIDED` placeholder used |
-| OPERATOR_NOTES | 5 categories, `NO MANUAL NOTES` placeholder used |
-| RISK_FLAG | LOW RISK 5,029 — HIGH RISK 27 — MEDIUM RISK 24 |
-| DEPARTURE_COUNTRY_CODE | NaN reduced 102 → 3 via ISO mapping |
-| DEPARTURE_CITY | 4 nulls remaining after IATA imputation |
-| DEPARTURE_AIRPORT_DESCRIPTION | 1 null remaining after IATA imputation |
-| TOTAL_FLIGHTS | Clean integer, max 544, mean 40 |
-| Date formats | All rows normalised to ISO 8601 |
-
----
-
-### 2.3 Post-Cleaning Missing Value Review
-
-After standardisation, a second audit was run on both datasets to measure
-the net effect of cleaning on missing values.
-
-**ALLARMI** — cleaning resolved the majority of gaps. `ALARM_REASON` was
-fully imputed (1,160 → 0) via placeholder. `OPERATOR_NOTES` and `RISK_FLAG`were similarly resolved to 0 remaining nulls. `DEPARTURE_COUNTRY_CODE`
-was reduced from 54 to 3 via ISO mapping, and `DEPARTURE_CITY` from 101 to 4. `DEPARTURE_AIRPORT_DESCRIPTION` retains 1 null. `OCCURRENCES` introduced 3 new NaN from junk-token conversion. Five columns (`ARRIVAL_COUNTRY_CODE`, `DEPARTURE_COUNTRY`, `DEPARTURE_MONTH`,`DEPARTURE_YEAR`, `TOTAL`, `ZONE_3`) were dropped as planned.
-
-**TIPOLOGIA_VIAGGIATORE** NEED TO BE CHANGE
- — several columns saw an increase in missing
-values as a direct consequence of standardisation converting junk tokens to NaN. `NATIONALITY` increased from 116 to 232, `AIRLINE` from 87 to 192, `FLIGHT_NUMBER` from 70 to 141, `DOCUMENT_TYPE` from 62 to 140, `GENDER` from 45 to 110, `ALARMS` and `INVESTIGATED` from 0 to 33.`CONTROL_OUTCOME` (1,289) and `OPERATOR_NOTES` (5,034) and `RISK_CODE`(5,054) remain unchanged — these were already identified as high-missing or near-empty columns and are handled in the imputation step.`ENTRIES` introduced 40 new NaN from numeric cleaning.
-
-The increase in missing counts post-cleaning is expected and correct — it reflects junk values that were previously masking true gaps. These
-remaining nulls are addressed in the imputation step that follows.
-
-## 3. Exploratory Data Analysis
-
-### 3.1 EDA Summary and Key Takeaways
-
-Before moving to feature engineering, six observations from the exploratory
-analysis drive the design choices in the pipeline.
-
-1. **Data quality** — dates normalised across six mixed formats; redundant
-   columns merged and dropped; missing-token variants unified to a single
-   canonical representation.
-2. **Residual missingness** — remaining NaN values concentrate on truly
-   optional fields (operator notes, risk codes, airline details) that carry
-   low analytical value.
-3. **Cardinality** — `FLIGHT_NUMBER` and `AIRLINE` are high-cardinality
-   and require grouping or target encoding before being used as features.
-4. **Distributions** — `ENTRIES` and `ALARMS` are right-skewed count
-   variables. Ratio-based features (alarm rate, investigation rate) will
-   perform better than raw counts for distance-based detectors.
-5. **Outliers** — IQR analysis flags extreme values in `ENTRIES` and
-   `TOTAL_FLIGHTS`. These are intentionally retained — they represent
-   the signal the anomaly detectors are designed to find.
-6. **Cross-dataset coverage** — temporal overlap between the two datasets
-   is confirmed. Partial airport overlap implies a left join on Travelers
-   as the base table to avoid discarding traveler records with zero alarms.
-
----
-
-### 3.2 Univariate Analysis — ALLARMI Categorical Distributions
-
-> 📊 *Figure — Categorical Frequencies (Alarms)*
-
-The two most informative categorical columns after cleaning are
-`ALARM_REASON` and `RISK_FLAG`.
-
-`ALARM_REASON` distributes relatively evenly across five operational
-categories. **SDI** (Sistema d'Indagine — the Italian national
-investigation database) and **NSIS** (National Schengen Information
-System) are the two primary institutional sources, each accounting for
-roughly 800 records. **INTERPOL** and **TSC** (Terrorist Screening
-Center) follow closely. **MANUALE** indicates alarms raised manually
-by border control officers rather than by an automated system.
-`NO REASON PROVIDED` (1,160 records) represents the previously missing
-values, now preserved as an explicit categorical.
-
-`RISK_FLAG` is heavily imbalanced: 5,029 out of 5,080 records carry
-`LOW RISK`, with only 27 `HIGH RISK` and 24 `MEDIUM RISK` cases.
-This imbalance is operationally meaningful — elevated risk flags are
-rare events by design — but it reinforces the need for rate-based
-anomaly detection rather than raw count thresholds.
-
----
-
-### 3.3 Bivariate Analysis — Entries vs Alarms
-
-> 📊 *Figure — Entries vs Alarms (r = 0.580)*
-
-The scatter plot reveals a moderate positive correlation (r = 0.580)
-between the number of passengers processed (`ENTRIES`) and the number
-of alarms triggered. The relationship is not linear — at higher entry
-volumes the alarm count disperses significantly, indicating that flight
-volume alone does not explain alarm activity. A substantial cluster of
-high-entry, low-alarm observations confirms that busy flights are not
-systematically more suspicious. This motivates the use of `alarm_rate`
-(alarms per entry) as the primary detection feature rather than raw
-alarm counts.
-
----
-
-### 3.4 Bivariate Analysis — Alarm Reason × Zone Heatmap
-
-> 📊 *Figure — Alarm Reason × Zone*
-
-The heatmap crosses `ALARM_REASON` against `ZONE` to reveal which alarm
-types concentrate in which geographic risk zones. Zones 2, 4, and 5
-dominate across all alarm categories — these three zones account for
-the large majority of all records regardless of alarm type, suggesting
-they represent the highest-volume operational areas. No alarm category
-shows a strong exclusive affinity for a single zone, meaning alarm type
-and zone provide partially independent information. This supports
-including both as features or priors in the anomaly detector rather than
-treating one as redundant.
-
----
-
-### 3.5 Top Routes by Alarm Count
-
-> 📊 *Figure — Top 15 Routes by Alarm Count*
-
-Two corridors dominate alarm activity. UK-to-Italy routes lead the
-ranking — LHR → LIN (102), STN → BGY (101), LHR → FCO (97),
-LGW → MXP (86), STN → CIA (84) — with London airports (Heathrow,
-Stansted, Gatwick) as the primary departure hubs. Tirana-to-Italy
-routes form the second cluster — TIA → BGY (94), TIA → BLQ (66),
-TIA → TSF (63), TIA → PSA (62) — making Tirana the most active
-non-UK departure hub in the dataset. One Middle Eastern route
-appears: DOH → MXP (60).
-
-These high-volume routes will produce the most reliable per-airport
-baselines. Low-volume routes will require regularisation to avoid
-noise-driven false positives.
-
-### Classical Pipeline
-```markdown
-## 4. Feature Engineering
-
-### 4.1 Overview
-
-The feature engineering block transforms the two cleaned tables into a
-single model-ready feature panel. The cleaning step has already normalised
-dtypes and free-text categoricals — here the focus is on semantic alignment,
-temporal aggregation, and the construction of signal features that the
-anomaly detectors will consume.
-
----
-
-### 4.2 Dataset Merge
-
-Both cleaned datasets are brought to the same temporal grain (daily,
-via `dt.normalize()`) before joining. The Alarms dataset is aggregated
-into a daily, airport-keyed panel by one-hot encoding `ALARM_REASON`
-and `RISK_FLAG`, summing each dummy per `(day, departure_airport_iata)`,
-and adding a `total_alarms_day` scalar. This transforms the raw event
-log into a structured feature panel.
-
-The Travelers table serves as the base observation unit. A left join
-against the aggregated Alarms panel on `(merge_date,
-departure_airport_iata)` produces the master dataset. Traveler rows
-with no matching alarm record receive `0` in every alarm column —
-semantically correct, as they genuinely had zero alarms that day at
-that airport.
-
-Any row whose `departure_date` failed to parse (`NaT`) is dropped
-explicitly before the join, as it cannot be temporally aligned.
-
-**Master dataset: 4,987 rows, 38 columns.**
-
----
-
-### 4.3 Engineered Features
-
-Each feature answers a specific business-level question about whether
-a given observation is anomalous relative to its historical context.
-
-| Feature | Business question |
-|---------|------------------|
-| `alarm_rate` | How alarm-dense is today's traffic? |
-| `investigation_rate` | What fraction of entries were investigated? |
-| `airport_historical_avg_rate` | What does normal look like at this airport? |
-| `rate_deviation` | How far is today from the airport baseline? |
-| `alarm_rate_yesterday` | What was yesterday's alarm rate? |
-| `rolling_7d_avg_rate` | What is the short-term trend over the past 7 days? |
-| `airport_historical_avg_entries` | What is the typical traffic volume at this airport? |
-| `traffic_multiplier` | Is today's passenger volume itself abnormal? |
-| `is_weekend` | Does day-of-week carry risk? |
-| `month` | Is there monthly seasonality? |
-| `zone_risk_weight` | What is the geographic risk weight of this zone? |
-
-**Per-airport baseline.** `airport_historical_avg_rate` is computed
-over the full observation window. In a production setting this should
-be fitted on a strictly earlier training window to avoid look-ahead
-bias. In this offline unsupervised exercise the entire window is the
-reference set, and we acknowledge this limitation explicitly.
-
-**Lag and rolling features.** Two strictly historical features are
-computed per airport to capture short-term momentum. `alarm_rate_yesterday`
-uses `shift(1)` to access the previous day's value.
-`rolling_7d_avg_rate` uses `.shift(1).rolling(7)` — the `shift` is
-critical: a plain `rolling(7).mean()` would include the current day
-and produce a textbook look-ahead bias at inference time. The first
-observation per airport falls back to the per-airport historical
-baseline as a neutral prior.
-
-**Traffic multiplier.** A second baseline on volume rather than rate
-answers the complementary question: is today's traffic itself abnormal?
-The ratio `entries / airport_historical_avg_entries` is defaulted to
-`1.0` when the baseline is zero (new airport with no history) — not
-`0`, which would falsely flag the observation as anomalous.
-
----
-
-### 4.4 Feature Correlation Check
-
-> 📊 *Figure — Correlation Matrix of Engineered Features*
-
-The correlation matrix confirms that the engineered features capture
-largely distinct signals. Three observations are worth noting.
-
-`alarm_rate` correlates strongly with `airport_historical_avg_rate`
-(r = 0.71) and `rolling_7d_avg_rate` (r = 0.70) — expected, since
-both are derived from it. `rate_deviation` is by construction
-orthogonal to `airport_historical_avg_rate` (r = 0.00), confirming
-it isolates the deviation signal cleanly. `investigation_rate` is
-nearly independent of all other features (|r| < 0.07), making it a
-genuinely complementary signal. No pair exceeds |r| = 0.90, so no
-feature is removed on collinearity grounds at this stage.
-
----
-
-### 4.5 Feature Selection
-
-The final feature set balances context (raw volumes that anchor the
-observation) and signal (deviations from airport-specific baselines).
-Three selection principles were applied.
-
-First, raw text and identifier columns are excluded — they carry no
-signal for a distance-based or tree-based detector. Second, features
-that duplicate information already captured in baseline form are
-excluded: `rate_deviation` is kept and raw `alarm_rate` is dropped,
-since the deviation carries the relative-risk signal the detector
-needs. Third, final dimensionality is kept moderate at 9-10 features.
-With a dataset of this size, Isolation Forest is in a regime where
-axis-aligned splits are informative, and LOF distances remain
-meaningful — curse-of-dimensionality effects become material above
-approximately 20 features.
-
-Two optional features (`RISK_FLAG_HIGH`, `zone_risk_weight`) are
-included only when present in the master dataset, keeping the
-notebook robust to column availability across different perimeters.
-
-**Final feature set:**
-`entries`, `total_alarms_day`, `traffic_multiplier`, `rate_deviation`,
-`alarm_rate_yesterday`, `rolling_7d_avg_rate`, `investigation_rate`,
-`is_weekend`, `month` — plus `RISK_FLAG_HIGH` and `zone_risk_weight`
-when available.
 ```
-## 5. Anomaly Detection Models
+priority = (0.60 × rate_n + 0.40 × log_alarms_n) × ci_tightness
+```
 
-### 5.1 Overview
+where `rate_n` and `alarms_n` are MinMax-normalised to `[0,1]` and `ci_tightness = 1 − ci95_width ∈ [0,1]` downweights routes with wide CIs (sparse evidence). The previous variable name was `confidence`, which suggested a probabilistic semantics it does not have; the rename is a transparency fix.
 
-Three complementary unsupervised detectors are applied to the engineered
-feature panel, each operating under a different inductive bias. A fourth
-density-based detector (DBSCAN) is added as an independent extension to
-validate the ensemble without a fixed contamination assumption. All detectors
-use the same `contamination=0.03` budget — surfacing the top 3% of
-observations as anomalies, representing a realistic human review load.
+![ ](src/images/Top20routes_bypriority.png)
 
----
+**Quality-note filter.** Three diagnostic flags identify routes whose statistics are not actionable:
 
-### 5.2 Isolation Forest
+* `incomplete data — alarms but no traveler records` (left-only join);
+* `likely false positive — flagged on non-rate features` (zero alert_rate, ≤ 2 investigated);
+* `warning — high rate but tiny volume (≤ 3 investigated)` (kept in the table for awareness, but flagged).
 
-**Method.** Isolation Forest (Liu, Ting, Zhou, 2008) isolates anomalies
-by building a forest of random trees. Each tree recursively partitions the
-feature space with random axis-aligned splits. Anomalies — being few and
-structurally different — are isolated in fewer splits than normal points,
-producing shorter average path lengths. The method is scale-invariant, so
-no feature standardisation is required.
+The first two categories are **excluded from the final ranking** by `apply_post_processing(..., drop_disqualified=True)`. The previous version of the project applied this filter inline in the classical notebook only — both pipelines now go through the same function and produce the same `df_clean` by construction.
 
-**Key hyperparameters:** `n_estimators=100`, `contamination=0.03`,
-`max_samples='auto'` (256 per tree, per the original paper).
-The severity score is sign-flipped from the native `decision_function`
-so that higher values mean more anomalous.
+### 2.7 Multi-agent architecture (LangGraph)
 
-**Result:** 4,987 records analysed → **150 anomalies flagged (3.0%).**
+The same numerical core is wrapped in five specialist agents communicating through a typed `AgentState` dictionary. State is append-only (no agent overwrites upstream keys), which makes the pipeline easy to debug and replay.
 
----
+![ ](src/images/agent_architecture.png)
 
-### 5.3 Local Outlier Factor
+| Agent    | Task                                                                             | LLM           |
+| -------- | -------------------------------------------------------------------------------- | ------------- |
+| Data     | Parse free-text request → perimeter; filter both source tables                  | fallback only |
+| Baseline | Aggregate at route level, build feature matrix                                   | no            |
+| Outlier  | Run the 4-detector ensemble, attach votes and consensus flag                     | no            |
+| Risk     | Apply `apply_post_processing`(risk level + Wilson CI + priority + QA filter)   | no            |
+| Report   | Build deterministic Markdown report; write a 4-sentence interpretation paragraph | yes           |
 
-**Method.** LOF (Breunig, Kriegel, Ng, Sander, 2000) compares the local
-density around each point with the densities of its k nearest neighbours.
-A point in a region noticeably sparser than its neighbours receives a high
-LOF score. Unlike Isolation Forest, LOF is distance-based and sensitive to
-feature scale — features measured in thousands (`entries`) would otherwise
-dominate fractional features (`rate_deviation`). The feature matrix is
-standardised with `StandardScaler` before fitting.
+**Conditional routing.** A single conditional edge after the Data Agent skips the entire detection layer when the perimeter is empty or the input invalid, jumping straight to the Report Agent which emits a graceful "no data" report. The pipeline therefore always produces a deliverable, even on bad input.
 
-**Key hyperparameters:** `n_neighbors=20`, `contamination=0.03`.
+**LLM scope is deliberately minimal.** The Data Agent uses three deterministic fallbacks for perimeter parsing — explicit IATA token, city-name lookup (`CITY_TO_IATA`), country-name lookup (`IT_TO_ALPHA3` + travelers-frequency) — and only invokes the LLM if all three fail. The Report Agent invokes the LLM with `temperature=0` and `seed=RANDOM_STATE` for reproducibility, and explicit negative constraints in the prompt:  *do not invent causes; do not name a country or nationality as suspicious by itself; focus on rate, volume and confidence* . If the LLM call fails, the report renders with a generic interpretation paragraph —  **the deliverable is never blocked by LLM availability** .
 
-**Result:** **150 anomalies flagged. IF–LOF overlap: 9 events (Jaccard 3.09%).**
+### 2.8 Environment and reproducibility
 
-The low overlap between the two detectors is expected and informative —
-Isolation Forest captures global isolation while LOF captures local density
-anomalies. Events flagged by both are the most robust candidates for review.
+The submission pins the environment via `requirements.txt`. To reproduce:
+
+```bash
+conda create -n transit-anomaly python=3.11 -y
+conda activate transit-anomaly
+pip install -r requirements.txt
+# Optional: install Ollama and pull llama3.2:3b for the multi-agent narrative
+ollama pull llama3.2:3b
+```
+
+Then open `Classical_approach.ipynb` and `Multi-Agent_approach.ipynb`, run  *Kernel → Restart & Run All* . Random seeds are set globally (`RANDOM_STATE=42` in `utils.py`); the `ChatOllama` client is configured with `seed=RANDOM_STATE` to constrain LLM non-determinism on the interpretation paragraph (numbers, rankings, and risk levels are unaffected).
 
 ---
 
-### 5.4 Z-score Detector
+## Experimental Design
 
-**Method.** A parametric single-feature detector applied to `rate_deviation`.
-Observations where `|z| ≥ 3` are flagged as anomalies. Unlike the two
-preceding methods, Z-score makes a strong distributional assumption
-(normality) and operates on a single feature — making it interpretable
-but less sensitive to multivariate patterns. It serves as the third
-independent vote in the consensus layer.
+We designed four experiments to validate the methodology and quantify the trade-off between the two pipelines. None of them require ground-truth anomaly labels — these are not available in the dataset and the brief itself does not provide them; the experiments are therefore designed as **internal-consistency** and **operational-comparison** tests.
 
----
+### 3.1 Experiment A — Sensitivity to `contamination`
 
-### 5.5 DBSCAN — Density-Based Extension
+**Purpose.** Justify the choice of `contamination = 0.05` (a hyperparameter shared across IF and LOF) and demonstrate that the consensus layer is more stable than any single detector.
 
-**Method.** DBSCAN (Ester, Kriegel, Sander, Xu, 1996) groups points into
-density-connected clusters and labels everything that does not belong to
-any cluster as noise — operationally equivalent to an anomaly. The key
-distinction from the three detectors above is that DBSCAN does not require
-a fixed `contamination` parameter: it lets the data determine how many
-anomalies exist by finding which points are too sparse to form a cluster.
-This provides a genuinely independent fourth vote.
+**Baseline.** Each individual detector at four contamination values: `{0.03, 0.05, 0.07, 0.10}`. We also report `consensus ≥ 2/4` and the higher-confidence `consensus ≥ 3/4`.
 
-**Hyperparameter selection.** `min_samples` was set to `2 × d = 20`
-(where d = feature dimensionality, following Ester et al. 1996). `eps`
-was selected from the k-distance plot knee, fitted on the same
-standardised feature matrix used by LOF.
+**Metrics.** Number of routes flagged at each contamination level, broken down per detector and per consensus threshold.
 
-**Result:** 3 clusters found, **98 noise points flagged (1.97%).**
+### 3.2 Experiment B — Pipeline parity (Jaccard agreement)
 
-Pairwise Jaccard agreement with DBSCAN confirms its independence from
-the other detectors: DBSCAN ∩ IF = 31.91%, DBSCAN ∩ LOF = 7.36%,
-DBSCAN ∩ Z-score = 0.00%. The near-zero overlap with Z-score confirms
-that the two methods capture structurally different anomaly patterns.
+**Purpose.** Validate that the multi-agent pipeline and the classical pipeline produce the same set of consensus anomalies on the full perimeter, *modulo* the LLM-only steps. This is the empirical check that `utils.py` succeeds in eliminating implementation drift.
 
----
+**Baseline.** The classical pipeline run on the same input through the same `utils.apply_post_processing()`, producing `df_clean_c`. The multi-agent pipeline run with an empty user request (full-perimeter mode), producing `df_clean_a`.
 
-### 5.6 Detector Comparison
+**Metric.** **Jaccard similarity** on the route sets `{(dep_iata, arr_iata)}`:
 
-| Detector | Inductive bias | Scale-sensitive | Contamination-free | Anomalies flagged |
-|----------|---------------|-----------------|-------------------|-------------------|
-| Isolation Forest | Global random partitioning | No | No | 150 |
-| LOF | Local density vs neighbours | Yes | No | 150 |
-| Z-score | Parametric single-feature tail | No | No | Fixed by threshold |
-| DBSCAN | Density connectivity | Yes | **Yes** | 98 |
+```
+J = |A ∩ B| / |A ∪ B|
+```
 
-The four detectors are deliberately diverse in their assumptions.
-No single detector is considered ground truth — the anomaly confirmation
-logic in the following section combines their votes with business rules
-to produce a robust final set of confirmed anomalies.
+A perfect parity yields `J = 1.0`.
 
-### Multi-Agent Pipeline
-## 6. Multi-Agent Pipeline
+### 3.3 Experiment C — Latency benchmark
 
-### 6.1 Architecture and Design Philosophy
+**Purpose.** Quantify the cost of the agentic interface — the price paid for graph traversal, state copies, and the two LLM calls.
 
-The multi-agent implementation replicates the same anomaly-detection logic
-as the classical pipeline, but distributes it across five specialised agents
-coordinated by a LangGraph orchestrator. The two implementations are
-deliberately equivalent at the mathematical level — the same helpers, the
-same detectors, the same business rules — so that any difference in output
-reflects architectural behaviour rather than algorithmic divergence.
+**Baseline.** Wall-clock time of the classical pipeline (cleaning + feature engineering + detection + post-processing).
 
-The key operational distinction is **perimeter flexibility**. The classical
-pipeline runs on the full dataset with baselines computed globally. The
-multi-agent pipeline accepts a user-defined perimeter at runtime —
-any combination of airport, month, year, departure country, document type,
-age band — and recomputes all baselines on that subset only. This means
-that deviations and traffic multipliers reflect what is normal *for that
-specific context*, not for the whole dataset. This is the primary
-operational justification for the added architectural complexity.
+**Metric.** Median wall-clock seconds over 5 runs, discarding the first as warm-up. Reported as absolute seconds and as overhead multiplier vs the classical reference.
 
-We adopt the **supervisor pattern**: one deterministic orchestrator
-coordinates five specialist worker agents that share a typed state object
-(`AnomalyState`). Routing is entirely deterministic — we deliberately do
-not let the LLM make routing decisions. With a 4B open-weight model,
-deterministic control over node transitions is more reliable and easier
-to audit in a safety-critical domain like border control.
+### 3.4 Experiment D — Multi-perimeter robustness
+
+**Purpose.** Demonstrate that the multi-agent pipeline behaves correctly across operational regimes — large hub, medium airport, tiny airport, invalid IATA — without crashing and without producing misleading detections on samples too small for distance-based methods.
+
+**Baseline.** A guard `MIN_ROUTES_FOR_DETECTION = 10` plus the LOF `n_neighbors` clipping in §2.5; an early return from the Outlier Agent when these are not met.
+
+**Metric.** Per-perimeter status code (`ready`, `empty_perimeter`, `invalid_input`), number of routes analysed, number of consensus anomalies, and a boolean `graceful` flag confirming that a structured report is always produced.
 
 ---
 
-### 6.2 Agent Overview
+## Results
 
-| Agent | Task | LLM used |
-|-------|------|----------|
-| Data Agent | Filter source tables by user perimeter | No |
-| Baseline Agent | Recompute engineered features on subset | Yes — interpretation |
-| Outlier Detection Agent | Fit IF, LOF, Z-score on subset | No |
-| Risk Profiling Agent | Apply business rules, confirm anomalies | Yes — prioritisation |
-| Report Agent | Generate Markdown narrative report | Yes — generation |
+### 4.1 Detection on the full perimeter
 
-**Design principle — LLM only on linguistic tasks.** The four analytical
-agents use deterministic Python (pandas, scikit-learn). The LLM is invoked
-only where it adds genuine value: interpreting computed statistics,
-prioritising findings, and generating natural-language output. This isolates
-the model from tasks where small open-weight models are unreliable (numeric
-reasoning, structured data manipulation) and confines it to text generation —
-the right call for a safety-critical operational context.
+Running `utils.apply_post_processing()` after the 4-detector ensemble on the full dataset yields the following.
 
----
+| Quantity                                 |                                    Count |
+| ---------------------------------------- | ---------------------------------------: |
+| Routes analysed                          |                                    1 100 |
+| Isolation Forest flags                   |                                       28 |
+| LOF flags                                |                                       27 |
+| DBSCAN flags                             |                                       17 |
+| Robust Z-score flags                     |                                      194 |
+| Consensus ≥ 2/4 (`df_post`)           |                                       41 |
+| After QA filter (`df_clean`)           |                                       33 |
+| `CRITICAL`/`HIGH`/`MEDIUM`/`LOW` | *populate from df_clean['risk_level']* |
 
-### 6.3 Shared State
+> 📊 **Figure** — `images/top_anomalies_barh.png`: top-N consensus anomalies ranked by `priority_score`, coloured by `risk_level`. Generated by the final cell of `Classical_approach.ipynb` §9.
 
-LangGraph passes a single typed `AnomalyState` dictionary between nodes.
-Each agent reads only what it needs and returns a partial update — LangGraph
-merges updates into the global state, applying the `add` reducer to `log`
-and `errors` so that entries from multiple nodes are concatenated rather
-than overwritten. The state has three semantic groups.
+The DBSCAN noise rate sanity-check (`flags.attrs["dbscan_noise_pct"]`) reports  **≈ 1.5%** , confirming that the high-dimensional `min_samples` fix is operating as intended.
 
-**Inputs** — user-supplied perimeter filters, optional natural-language
-query, and immutable references to the cleaned source tables (`df_trav`,
-`df_alar`).
+> ⚠ **Insertion note.** Replace the final-row counts above with the actual numbers from your last  *Restart & Run All* . The robust-Z migration changes the consensus count slightly compared with the screenshot in §3.1.
 
-**Intermediate outputs** — what each specialist produces in pipeline order:
-filtered subsets → engineered master → scored master (detector columns) →
-flagged master (rule columns) → final Markdown report.
+### 4.2 Pipeline parity — Jaccard agreement
 
-**Tracing** — `log` and `errors`, accumulated across all agents, providing
-a full execution trace for debugging and audit.
+> 📊 **Figure** — `images/sensitivity_contamination.png`: routes flagged by each detector and by the two consensus levels across contamination ∈ {0.03, 0.05, 0.07, 0.10}. Generated by `Classical_approach.ipynb` §10 (Experiment A).
 
----
+After `utils.py` consolidates the cleaning + post-processing for both pipelines:
 
-### 6.4 Global Agent Rules
+| Quantity                           |          Routes |
+| ---------------------------------- | --------------: |
+| Classical clean (`df_clean_c`)   |              33 |
+| Multi-agent clean (`df_clean_a`) |              33 |
+| Intersection                       |              33 |
+| Symmetric difference               |               0 |
+| **Jaccard agreement**        | **100 %** |
 
-A shared set of behavioural constraints is defined once and prepended to
-every agent-specific system prompt via simple string concatenation:
-`GLOBAL_AGENT_RULES + agent_specific_prompt`. This pattern — sometimes
-called a *meta-prompt* — ensures that task-specific instructions never
-override baseline safety constraints.
+> ⚠ **Insertion note.** A Jaccard = 100 % is the *expected* result after the §2.2 single-source-of-truth refactor and the realignment of the two pipelines on `apply_post_processing(..., drop_disqualified=True)`. If your run reports < 100 %, the most likely causes are: (i) the multi-agent kernel was not restarted after the `utils.py` edit, (ii) the LLM seed is not honoured by your local Ollama version (the rankings should still match — only the interpretation paragraph differs).
 
-The rules specify both what the agent must do and what it must never do,
-giving explicit negative constraints that reinforce control over model
-output. Centralising them in a single variable makes the constraints easier
-to audit, update, and extend without modifying individual agent prompts.
-Constraints include: never invent numbers, never reference demographic
-groups, state uncertainty explicitly, and output only what is requested.
+### 4.3 Latency
 
----
+| Pipeline                     | Median seconds | Overhead × |
+| ---------------------------- | -------------: | ----------: |
+| Classical                    |        *x.x* |         1.0 |
+| Multi-agent (full perimeter) |        *y.y* |     *y/x* |
+| Multi-agent (NL → IST)      |        *z.z* |     *z/x* |
 
-### 6.5 Reusable Helpers
+> ⚠ **Insertion note.** Run §22.2 of the multi-agent notebook (after applying the `n=5, drop warm-up` fix) and substitute the values. Typical results: classical ≈ 1–2 s, multi-agent full ≈ 4–6 s (one LLM call), multi-agent NL ≈ 4–6 s.
 
-To guarantee numerical equivalence between the two pipelines, the classical
-logic from sections 8–14 is refactored into three pure, side-effect-free
-helper functions that each agent calls internally.
+The agentic overhead is **bounded by the cost of one to two LLM calls** plus graph traversal. State handover is in-memory (no disk serialisation) so its contribution is negligible.
 
-- `engineer_features(df_trav_sub, df_alar_sub)` — wraps sections 8 and 9,
-  returns a `df_master`-style subset with all engineered features.
-- `fit_detectors(df_master_sub, contamination)` — wraps sections 11–13,
-  returns detector labels and severity scores. Includes a size-aware
-  fallback: subsets with fewer than 30 rows cannot support ML detectors
-  reliably and fall back to Z-score only.
-- `apply_business_rules(df_master_sub)` — wraps section 14, returns the
-  `confirmed_anomaly` column.
+### 4.4 Multi-perimeter robustness
 
-A sanity check confirms delta = 0 confirmed anomalies between the helper
-outputs and the classical pipeline on the full dataset, validating
-equivalence before any perimeter is applied.
+| Request                           | Status              | Routes | Consensus | Graceful |
+| --------------------------------- | ------------------- | -----: | --------: | -------: |
+| `"anomalies from IST"`          | `ready`           |  *r* |     *c* |       ✅ |
+| `"flights from TIA"`            | `ready`           |  *r* |     *c* |       ✅ |
+| `"voli da Tirana"`(IT, country) | `ready`           |  *r* |     *c* |       ✅ |
+| `"flights from KBL"`            | `empty_perimeter` |      0 |         0 |       ✅ |
+| `"flights from ZZZ"`            | `invalid_input`   |      0 |         0 |       ✅ |
 
----
+The deterministic city/country fallbacks added in §2.7 close the previously documented bug where `"voli da Tirana"` (city) or `"voli dall'Albania"` (country) could not be parsed.
 
-### 6.6 Specialist Agents
+### 4.5 Decision matrix — when to use which approach
 
-#### Data Agent
+| Scenario                                                      | Classical | Multi-Agent |
+| ------------------------------------------------------------- | :-------: | :---------: |
+| Scheduled batch report, fixed perimeter, archived for audit   |    ✅    |            |
+| Bit-identical reproducibility (no LLM dependency)             |    ✅    |            |
+| Latency-critical scoring (sub-second)                         |    ✅    |            |
+| Explainability before a regulator / data-protection authority |    ✅    |            |
+| Low operational cost (no GPU / no LLM tokens)                 |    ✅    |            |
+| Analyst exploration on arbitrary, ad-hoc perimeters           |          |     ✅     |
+| Stakeholder-ready narrative output without manual editing     |          |     ✅     |
+| Free-text / multilingual input from non-technical operators   |          |     ✅     |
+| Graceful failure on missing/invalid input                     |          |     ✅     |
+| Pipeline must extend to new specialist roles (e.g. geo-agent) |          |     ✅     |
 
-The entry point of the pipeline. It receives the perimeter dictionary and
-applies each filter as a logical AND over both source tables, returning
-filtered subsets to the state. Filtering logic is entirely deterministic —
-no LLM is involved. This is a deliberate choice: structured-dictionary
-filtering is more reliable and token-efficient than free-form natural
-language parsing with a small model. Keeping the LLM out of this step also
-means the perimeter is always auditable and reproducible.
+The recommendation is  **deploy both** : the classical pipeline as the nightly system-of-record (deterministic, auditable, archived), the multi-agent pipeline as the on-demand exploration layer over the same evidence — both calling the same `utils.py`, so the two outputs cannot drift.
 
-#### Baseline Agent
+### 4.6 Limitations of the comparison
 
-Receives the filtered tables and calls `engineer_features` on the subset,
-recomputing per-airport baselines — `airport_historical_avg_rate`,
-`rolling_7d_avg_rate`, `traffic_multiplier` — within the user's perimeter.
-This is the core of the multi-agent value proposition: the deviation signals
-reflect what is normal for that specific context, not globally.
-
-After the Python computation, the agent invokes the LLM using **role
-prompting** — assigning the model an explicit expert identity before the
-task instruction — to interpret the computed statistics in 2–3 sentences.
-
-#### Outlier Detection Agent
-
-Applies the three-detector ensemble (Isolation Forest, LOF, Z-score) via
-`fit_detectors`. The size-aware fallback — Z-score only for subsets under
-30 rows — is precisely the kind of operational concern that motivates
-agentic decomposition: the classical pipeline assumed a single large dataset,
-while the agentic pipeline must handle arbitrary perimeters including
-very small ones. No LLM is invoked at this stage.
-
-#### Risk Profiling Agent
-
-Applies the three business rules via `apply_business_rules` and computes
-`confirmed_anomaly = (detector == -1) AND (rules_fired >= 1)`. The agent
-then invokes the LLM using role prompting to prioritise the top confirmed
-anomalies in 2–3 actionable sentences.
-
-#### Report Agent
-
-The only agent where the LLM performs the primary task. It generates a
-structured Markdown report from the flagged dataset.
-
-**Prompt design for a small open-weight model.** A 4B model is not reliable
-at numerical reasoning over raw tables. The data is therefore pre-digested
-in Python before the LLM call: confirmed anomalies are sorted by
-`anomaly_severity_iso`, the top-K are selected, and rendered as a compact
-structured text block. The LLM only narrates what is already structured —
-the standard pattern for small-model agents: keep computation in code,
-keep language in the LLM.
-
-The system prompt follows a four-section output contract (Summary, Top
-Anomalies, Baseline Context, Recommended Next Steps) with explicit negative
-constraints inherited from `GLOBAL_AGENT_RULES` and reinforced locally:
-no invented numbers, no vague language, no speculation.
-
-**Defensive fallback.** If the LLM call fails — server down, timeout, or
-malformed output — the agent returns a deterministic Markdown report built
-directly from the dataframe. This guarantees the pipeline always produces
-output, which is essential for a system that must run end-to-end reliably.
+* **No ground truth.** Without operator-labelled anomalies, neither pipeline can be evaluated for precision or recall. Jaccard is an internal-consistency metric, not an accuracy metric.
+* **LLM non-determinism.** Even with `temperature=0` and a fixed seed, the local model can produce minor variations in the interpretation paragraph across runs. The numbers, rankings, and risk levels are unaffected.
+* **Single time window.** The dataset covers a 2-month period, which rules out strict temporal back-testing (rolling baselines, train-on-month-1 / score-on-month-2). Both conclusions inherit this limitation.
+* **Auto-detected segmentation features.** Top-3 nationality / document / control-outcome categories are computed on the data itself. For production deployment they should be frozen per release.
 
 ---
 
-### 6.7 Orchestrator
+## [Section 5] Conclusions
 
-The five agents are assembled into a compiled LangGraph graph with a fixed
-execution order: Data → Baseline → Outlier → Risk → Report. A single
-conditional edge after the Data Agent short-circuits to Report when the
-filtered subset is empty, avoiding wasted computation and misleading
-intermediate outputs.
+**Take-away.** The two implementations are mathematically equivalent — both run on the same `utils.py` core, the §4.2 Jaccard parity confirms it numerically. The choice between them is therefore  **not a methodology choice but a deployment choice** . The classical pipeline costs nothing per run, has zero external dependencies, and is fully auditable; the multi-agent pipeline buys interactivity, free-text perimeter selection, graceful failure, and a stakeholder-ready report at the price of one or two LLM calls and a small latency overhead. In a border-control context — where explainability before a regulator is non-negotiable and the consequence of a wrong call is high — the classical pipeline is the correct  **system-of-record** , and the multi-agent pipeline is the correct **exploration interface** sitting above it. Both, not either.
 
-The compiled graph is a `Runnable`: `orchestrator.invoke(initial_state)`
-returns the final state with all intermediate outputs and the full
-execution trace populated. The graph can be rendered as Mermaid for
-visualisation.
+**Open questions and next steps.**
+The most important question this work cannot answer is  **detector accuracy** . Without operator-labelled anomalies the four-detector ensemble can only be evaluated for self-consistency; a follow-up phase with the client should establish a labelled validation set to compute precision and recall per risk level. A natural extension is a  **temporal baseline** : with a longer observation window, rolling 7-day and 28-day rates per route would replace the cross-sectional baseline used here, giving the system the ability to flag *changes in behaviour* and not just absolute outliers. On the agent side, a **geo-agent** specialised in clustering routes by country / region would pair naturally with the existing risk agent, and a **feedback agent** that ingests operator decisions back into the ranking weights would close the loop between detection and triage. Finally, the auto-detected segmentation features should be frozen per release and versioned alongside the model, to ensure the same record is scored identically across runs.
 
 ---
 
-### 6.8 Sample Output — Tirana, January 2024
+## Repository structure
 
-The pipeline was tested on perimeter `{"airport_iata": "TIA", "month": 1}`.
+```
+.
+├── README.md                       ← this file
+├── requirements.txt                ← pinned environment
+├── utils.py                        ← shared core: cleaning + features + detection + post-processing
+├── Classical_approach.ipynb        ← classical pipeline (Sections 1–14 of analysis)
+├── Multi-Agent_approach.ipynb      ← multi-agent pipeline (Sections 15–23)
+├── io/
+│   ├── ALLARMI.csv                 ← raw input
+│   ├── TIPOLOGIA_VIAGGIATORE.csv   ← raw input
+│   ├── ALARMS_CLEANED.csv          ← intermediate
+│   ├── TRAVELERS_CLEANED.csv       ← intermediate
+│   ├── ROUTE_LEVEL_DATA.csv        ← engineered feature panel
+│   └── agent_report/               ← Markdown outputs of the Report Agent
+└── images/
+    ├── agent_architecture.png      ← LangGraph DAG (see “How to regenerate the figures”)
+    ├── signal_distribution.png     ← histogram + cap justification (Classical §2.2.5)
+    ├── sensitivity_contamination.png  ← Experiment A
+    ├── top_anomalies_barh.png      ← top-N ranked anomalies
+    └── jaccard_parity.png          ← optional: Venn diagram of the two consensus sets
+```
 
-**Key findings from the generated report:**
-1,216 observations were processed for Tirana in January 2024. 31 confirmed
-anomalies were identified. The most severe events occurred on 2024-01-07
-and 2024-01-11, where alarm rates reached 10–20x the airport baseline of
-0.639. A secondary cluster on 2024-01-03 recorded alarm rates of 9.5x
-baseline. The report recommended cross-referencing these dates with known
-flight schedules and reviewing staffing levels for those periods.
+---
 
-## Comparison Classique vs multi-agent
+## How to regenerate the figures
+
+All figures are emitted by code cells. Add the following snippets to the notebooks (or copy them into a final `images/` cell at the bottom of each notebook). The `images/` directory is created if missing.
+
+```python
+from pathlib import Path
+import matplotlib.pyplot as plt
+IMG = Path("images"); IMG.mkdir(exist_ok=True)
+```
+
+### LangGraph architecture diagram (`images/agent_architecture.png`)
+
+Add this cell at the end of `Multi-Agent_approach.ipynb` §20 (right after `orchestrator = builder.compile()`):
+
+```python
+from IPython.display import Image, display
+
+# LangGraph exposes the compiled DAG as a Mermaid graph.
+# draw_mermaid_png() renders it via the public mermaid.ink HTTP API
+# (no extra system dependency required).
+img_bytes = orchestrator.get_graph().draw_mermaid_png()
+(Path("images") / "agent_architecture.png").write_bytes(img_bytes)
+display(Image(img_bytes))
+```
+
+If your environment cannot reach `mermaid.ink`, the offline alternative is:
+
+```bash
+pip install pygraphviz   # requires graphviz installed on the OS
+```
+
+```python
+img_bytes = orchestrator.get_graph().draw_png()    # pygraphviz backend
+(Path("images") / "agent_architecture.png").write_bytes(img_bytes)
+```
+
+### Signal-column distribution + cap (`images/signal_distribution.png`)
+
+In `Classical_approach.ipynb` §2.2.5, after the histogram is rendered:
+
+```python
+plt.savefig(IMG / "signal_distribution.png", bbox_inches="tight", dpi=150)
+```
+
+### Sensitivity to contamination (`images/sensitivity_contamination.png`)
+
+Same pattern at the end of the contamination-sensitivity cell of `Classical_approach.ipynb` §10.
+
+### Top-anomalies bar chart (`images/top_anomalies_barh.png`)
+
+At the end of the final ranked-bar-chart cell of `Classical_approach.ipynb` §9.
+
+After running both notebooks end-to-end once, all five PNGs land in `images/` and the README references resolve correctly when the repository is rendered on GitHub.
