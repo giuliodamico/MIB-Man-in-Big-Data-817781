@@ -1,0 +1,1330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multi-Agent Demo · Transit Anomaly Detection</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+:root {
+  --bg: #FFFFFF;
+  --bg-soft: #FAF9F6;
+  --bg-deep: #F0EFEA;
+  --terminal-bg: #1A1F2B;
+  --terminal-line: #2A2F3B;
+  --ink: #1A1A1A;
+  --ink-soft: #4A4A4A;
+  --ink-mute: #8A8A8A;
+  --reply-orange: #F39200;
+  --reply-green: #16A64C;
+  --reply-green-soft: #E5F4EA;
+  --reply-teal: #004E59;
+  --luiss-blue: #003D7A;
+  --luiss-blue-soft: #E8EFF7;
+  --accent-red: #C8102E;
+  --rule: #E5E5E5;
+  --rule-strong: #C8C8C8;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 1px 3px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.04);
+  --shadow-lg: 0 4px 12px rgba(0,0,0,0.06), 0 16px 48px rgba(0,0,0,0.08);
+  --ease-smooth: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Terminal syntax */
+  --term-fg: #D4D8E0;
+  --term-mute: #8A92A3;
+  --term-info: #4FC3F7;
+  --term-success: #16A64C;
+  --term-warn: #F39200;
+  --term-error: #FF5A5F;
+  --term-num: #FFB75A;
+  --term-string: #FFD66B;
+  --term-keyword: #C792EA;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  font-family: 'Inter', 'Helvetica Neue', system-ui, sans-serif;
+  background: var(--bg-deep);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+}
+.mono { font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
+
+/* ====== Layout ====== */
+.app {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 24px 32px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.topbar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--rule);
+}
+.topbar .brand {
+  display: flex; align-items: center; gap: 12px;
+}
+.topbar .brand-mark {
+  width: 36px; height: 36px;
+  background: linear-gradient(135deg, var(--luiss-blue) 0%, #1862B5 100%);
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  color: #FFF;
+  font-weight: 700; font-size: 16px;
+  box-shadow: 0 2px 8px rgba(0,61,122,0.25);
+}
+.topbar .brand-text {
+  display: flex; flex-direction: column; line-height: 1.1;
+}
+.topbar .brand-text .title {
+  font-size: 16px; font-weight: 700; color: var(--luiss-blue);
+}
+.topbar .brand-text .sub {
+  font-size: 12px; color: var(--ink-soft);
+  letter-spacing: 0.3px;
+}
+.topbar .right {
+  display: flex; align-items: center; gap: 18px;
+  font-size: 12px; color: var(--ink-soft);
+  text-transform: uppercase; letter-spacing: 0.6px;
+}
+.topbar .right .status-pill {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
+  background: var(--reply-green-soft);
+  border: 1px solid var(--reply-green);
+  border-radius: 12px;
+  color: var(--reply-green);
+  font-weight: 600;
+  font-size: 11px;
+}
+.topbar .right .status-pill::before {
+  content: '';
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--reply-green);
+  box-shadow: 0 0 0 0 rgba(22, 166, 76, 0.4);
+  animation: pulse 1.8s var(--ease-smooth) infinite;
+}
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(22, 166, 76, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(22, 166, 76, 0); }
+}
+.topbar .right .reply-mark { height: 18px; width: auto; }
+.topbar .right .reply-mark .fil0 { fill: var(--reply-green); }
+.topbar .right .reply-mark .fil1 { fill: var(--reply-teal); }
+
+/* ====== Hero ====== */
+.hero {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 8px 0 4px;
+}
+.hero h1 {
+  font-size: 36px; font-weight: 700;
+  color: var(--luiss-blue);
+  letter-spacing: -0.5px;
+  line-height: 1.1;
+}
+.hero p {
+  font-size: 16px; color: var(--ink-soft);
+  max-width: 720px;
+  line-height: 1.5;
+}
+
+/* ====== Query bar ====== */
+.query-card {
+  background: var(--bg);
+  border-radius: 14px;
+  padding: 24px 28px;
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--rule);
+  display: flex; flex-direction: column; gap: 16px;
+}
+.query-row {
+  display: flex; gap: 12px;
+}
+.query-input {
+  flex: 1;
+  padding: 14px 18px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 10px;
+  font-size: 16px;
+  font-family: 'JetBrains Mono', monospace;
+  background: var(--bg-soft);
+  transition: border-color 200ms var(--ease-smooth), background 200ms var(--ease-smooth);
+  outline: none;
+}
+.query-input:focus {
+  border-color: var(--luiss-blue);
+  background: var(--bg);
+  box-shadow: 0 0 0 3px var(--luiss-blue-soft);
+}
+.btn {
+  font-family: 'Inter', sans-serif;
+  font-size: 15px; font-weight: 600;
+  padding: 14px 24px;
+  border-radius: 10px;
+  border: none;
+  cursor: pointer;
+  display: inline-flex; align-items: center; gap: 8px;
+  transition: transform 150ms var(--ease-smooth), box-shadow 200ms var(--ease-smooth), background 200ms;
+}
+.btn-primary {
+  background: linear-gradient(135deg, var(--luiss-blue) 0%, #1862B5 100%);
+  color: #FFF;
+  box-shadow: 0 2px 8px rgba(0, 61, 122, 0.25);
+}
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0, 61, 122, 0.35);
+}
+.btn-primary:disabled {
+  opacity: 0.5; cursor: not-allowed;
+  background: var(--ink-mute);
+}
+.btn-ghost {
+  background: transparent;
+  color: var(--ink-soft);
+  border: 1px solid var(--rule-strong);
+}
+.btn-ghost:hover {
+  background: var(--bg-soft);
+  color: var(--ink);
+}
+
+.preset-row {
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+}
+.preset-label {
+  font-size: 12px; color: var(--ink-mute);
+  text-transform: uppercase; letter-spacing: 0.6px;
+  margin-right: 4px;
+}
+.preset-chip {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  padding: 6px 12px;
+  background: var(--bg-soft);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--ink-soft);
+  transition: all 180ms var(--ease-smooth);
+}
+.preset-chip:hover {
+  background: var(--reply-green-soft);
+  border-color: var(--reply-green);
+  color: var(--reply-teal);
+}
+.preset-chip.bad:hover {
+  background: #FFE5E5;
+  border-color: var(--accent-red);
+  color: var(--accent-red);
+}
+
+/* ====== Pipeline visualization ====== */
+.pipeline-card {
+  background: var(--bg);
+  border-radius: 14px;
+  padding: 28px 28px 24px;
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--rule);
+}
+.pipeline-card h2 {
+  font-size: 13px; font-weight: 600;
+  color: var(--ink-soft);
+  text-transform: uppercase; letter-spacing: 0.8px;
+  margin-bottom: 20px;
+}
+.pipeline {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0;
+}
+.agent-node {
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 8px 4px;
+  position: relative;
+  cursor: pointer;
+  transition: transform 200ms var(--ease-smooth);
+}
+.agent-node:hover { transform: translateY(-2px); }
+.agent-icon {
+  width: 60px; height: 60px;
+  border-radius: 14px;
+  background: var(--bg-soft);
+  border: 1.5px solid var(--rule-strong);
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 22px; font-weight: 700;
+  color: var(--ink-mute);
+  position: relative;
+  transition: all 350ms var(--ease-smooth);
+}
+.agent-icon::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 16px;
+  border: 2px solid transparent;
+  transition: border-color 350ms var(--ease-smooth);
+}
+.agent-node.idle .agent-icon { background: var(--bg-soft); }
+.agent-node.active .agent-icon {
+  background: linear-gradient(135deg, var(--luiss-blue) 0%, #1862B5 100%);
+  border-color: var(--luiss-blue);
+  color: #FFF;
+}
+.agent-node.active .agent-icon::before {
+  border-color: var(--luiss-blue);
+  animation: ring-pulse 1.5s var(--ease-smooth) infinite;
+}
+@keyframes ring-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50% { opacity: 0; transform: scale(1.15); }
+}
+.agent-node.done .agent-icon {
+  background: var(--reply-green-soft);
+  border-color: var(--reply-green);
+  color: var(--reply-green);
+}
+.agent-node.done .agent-icon::after {
+  content: '✓';
+  position: absolute;
+  top: -6px; right: -6px;
+  width: 22px; height: 22px;
+  background: var(--reply-green);
+  color: #FFF;
+  border-radius: 50%;
+  font-size: 13px;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 6px rgba(22,166,76,0.4);
+  animation: pop 350ms var(--ease-smooth);
+}
+.agent-node.skipped .agent-icon {
+  background: var(--bg-soft);
+  border-style: dashed;
+  border-color: var(--ink-mute);
+  color: var(--ink-mute);
+  opacity: 0.5;
+}
+.agent-node.error .agent-icon {
+  background: #FFE5E5;
+  border-color: var(--accent-red);
+  color: var(--accent-red);
+}
+.agent-node.error .agent-icon::after {
+  content: '✕';
+  position: absolute;
+  top: -6px; right: -6px;
+  width: 22px; height: 22px;
+  background: var(--accent-red);
+  color: #FFF;
+  border-radius: 50%;
+  font-size: 12px;
+  display: flex; align-items: center; justify-content: center;
+}
+@keyframes pop {
+  0% { transform: scale(0); }
+  60% { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+.agent-name {
+  font-size: 13px; font-weight: 600;
+  color: var(--ink);
+}
+.agent-task {
+  font-size: 11px; color: var(--ink-mute);
+  text-align: center;
+  line-height: 1.3;
+  max-width: 110px;
+}
+.agent-llm-badge {
+  position: absolute;
+  top: 0; right: 12px;
+  background: var(--reply-orange);
+  color: #FFF;
+  font-size: 9px; font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 8px;
+  letter-spacing: 0.5px;
+}
+
+.connector {
+  flex: 0 0 24px;
+  height: 2px;
+  background: var(--rule-strong);
+  position: relative;
+  align-self: center;
+  margin-top: -36px;
+}
+.connector.flow {
+  background: linear-gradient(90deg, var(--reply-green) 0%, var(--reply-green) 50%, var(--rule-strong) 50%, var(--rule-strong) 100%);
+  background-size: 200% 100%;
+  background-position: 100% 0;
+  animation: flow-fill 600ms var(--ease-smooth) forwards;
+}
+.connector.done {
+  background: var(--reply-green);
+}
+.connector.skipped {
+  background: repeating-linear-gradient(90deg, var(--ink-mute) 0, var(--ink-mute) 4px, transparent 4px, transparent 8px);
+  opacity: 0.5;
+}
+@keyframes flow-fill {
+  to { background-position: 0 0; }
+}
+
+/* ====== Terminal logs ====== */
+.terminal-card {
+  background: var(--terminal-bg);
+  border-radius: 14px;
+  padding: 0;
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--terminal-line);
+  overflow: hidden;
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+}
+.terminal-head {
+  background: var(--terminal-line);
+  padding: 10px 16px;
+  display: flex; align-items: center; gap: 12px;
+  border-bottom: 1px solid #000;
+}
+.terminal-dots {
+  display: flex; gap: 6px;
+}
+.terminal-dots span {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--ink-mute);
+  opacity: 0.5;
+}
+.terminal-dots span:nth-child(1) { background: #FF5F57; opacity: 0.8; }
+.terminal-dots span:nth-child(2) { background: #FEBC2E; opacity: 0.8; }
+.terminal-dots span:nth-child(3) { background: #28C840; opacity: 0.8; }
+.terminal-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--term-mute);
+}
+.terminal-body {
+  padding: 16px 18px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--term-fg);
+  flex: 1;
+  overflow-y: auto;
+  max-height: 400px;
+  scroll-behavior: smooth;
+}
+.terminal-body::-webkit-scrollbar { width: 8px; }
+.terminal-body::-webkit-scrollbar-track { background: var(--terminal-bg); }
+.terminal-body::-webkit-scrollbar-thumb { background: var(--terminal-line); border-radius: 4px; }
+.log-line {
+  opacity: 0;
+  animation: log-in 240ms var(--ease-smooth) forwards;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+@keyframes log-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.log-info { color: var(--term-info); font-weight: 500; }
+.log-success { color: var(--term-success); font-weight: 500; }
+.log-warn { color: var(--term-warn); font-weight: 500; }
+.log-error { color: var(--term-error); font-weight: 500; }
+.log-fallback { color: var(--term-keyword); font-weight: 500; }
+.log-conditional { color: var(--reply-orange); font-weight: 600; }
+.log-num { color: var(--term-num); font-weight: 600; }
+.log-str { color: var(--term-string); }
+.log-agent {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 8px;
+  border-radius: 4px;
+  margin-right: 6px;
+  font-size: 11px;
+  color: var(--term-fg);
+  letter-spacing: 0.4px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.log-prompt::before {
+  content: '$ ';
+  color: var(--term-success);
+  font-weight: 600;
+}
+.terminal-empty {
+  color: var(--term-mute);
+  font-style: italic;
+  opacity: 0.7;
+}
+.terminal-cursor::after {
+  content: '▊';
+  color: var(--term-fg);
+  animation: cursor-blink 1.1s step-end infinite;
+  margin-left: 2px;
+}
+@keyframes cursor-blink {
+  0%, 50% { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+
+/* ====== Report card ====== */
+.report-card {
+  background: var(--bg);
+  border-radius: 14px;
+  padding: 32px 36px;
+  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--rule);
+  min-height: 200px;
+  position: relative;
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity 400ms var(--ease-smooth), transform 400ms var(--ease-smooth);
+}
+.report-card.visible {
+  opacity: 1; transform: translateY(0);
+}
+.report-card .report-meta {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--rule);
+}
+.report-card .report-meta .label {
+  font-size: 11px; font-weight: 600;
+  color: var(--reply-orange);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.report-card .report-meta .label.success { color: var(--reply-green); }
+.report-card .report-meta .label.warn { color: var(--reply-orange); }
+.report-card .report-meta .label.error { color: var(--accent-red); }
+.report-card .timestamp {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+.report-content h1 {
+  font-size: 24px; color: var(--luiss-blue); font-weight: 700;
+  margin-bottom: 8px;
+}
+.report-content h2 {
+  font-size: 16px; color: var(--ink); font-weight: 600;
+  margin-top: 18px; margin-bottom: 8px;
+}
+.report-content p {
+  font-size: 15px; line-height: 1.6;
+  margin-bottom: 10px;
+  color: var(--ink);
+}
+.report-content p strong { color: var(--luiss-blue); }
+.report-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 14px;
+}
+.report-content table th {
+  text-align: left;
+  padding: 8px 12px;
+  background: var(--bg-soft);
+  border-bottom: 2px solid var(--rule-strong);
+  font-weight: 600;
+  color: var(--ink-soft);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.report-content table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--rule);
+  font-size: 14px;
+}
+.report-content table td.mono { font-family: 'JetBrains Mono', monospace; }
+.report-content code, .report-content .mono {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.92em;
+  background: var(--bg-soft);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.report-content .interpretation {
+  background: var(--reply-green-soft);
+  border-left: 4px solid var(--reply-green);
+  padding: 14px 18px;
+  border-radius: 6px;
+  margin-top: 16px;
+  position: relative;
+}
+.report-content .interpretation::before {
+  content: 'LLM-generated interpretation';
+  display: block;
+  font-size: 10px;
+  color: var(--reply-teal);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 6px;
+}
+.report-content .interpretation p { margin-bottom: 0; font-size: 14px; }
+.report-content .footnote {
+  font-size: 12px; color: var(--ink-mute); font-style: italic;
+  margin-top: 16px;
+}
+.report-content .risk-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
+.risk-pill.HIGH { background: #FFE5CC; color: #B05A00; }
+.risk-pill.MEDIUM { background: #FFF3CC; color: #806600; }
+.risk-pill.LOW { background: var(--bg-soft); color: var(--ink-soft); }
+.risk-pill.CRITICAL { background: #FFE5E5; color: var(--accent-red); }
+
+.report-empty {
+  text-align: center;
+  color: var(--ink-mute);
+  font-style: italic;
+  font-size: 14px;
+  padding: 30px 0;
+}
+
+/* ====== Counters strip ====== */
+.metrics-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-top: 18px;
+}
+.metric {
+  background: var(--bg-soft);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.metric .label {
+  font-size: 10px; font-weight: 600;
+  color: var(--ink-mute);
+  text-transform: uppercase; letter-spacing: 0.6px;
+  margin-bottom: 4px;
+}
+.metric .value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 22px; font-weight: 600;
+  color: var(--reply-orange);
+  letter-spacing: -0.5px;
+}
+.metric .value.dim { color: var(--ink-mute); }
+
+/* ====== Footer ====== */
+.footer {
+  text-align: center;
+  font-size: 12px;
+  color: var(--ink-mute);
+  padding: 20px 0 8px;
+  border-top: 1px solid var(--rule);
+  margin-top: 12px;
+}
+.footer a { color: var(--ink-soft); text-decoration: none; }
+
+/* ====== Responsive ====== */
+@media (max-width: 900px) {
+  .pipeline { flex-wrap: wrap; gap: 12px; justify-content: center; }
+  .connector { display: none; }
+  .agent-node { flex: 0 0 calc(50% - 6px); }
+  .metrics-strip { grid-template-columns: repeat(2, 1fr); }
+  .query-row { flex-direction: column; }
+  .hero h1 { font-size: 28px; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ========== TOP BAR ========== -->
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark">M·A</div>
+      <div class="brand-text">
+        <div class="title">Multi-Agent Demo</div>
+        <div class="sub">Transit Anomaly Detection · live perimeter exploration</div>
+      </div>
+    </div>
+    <div class="right">
+      <span class="status-pill">Idle</span>
+      <span style="display:flex; align-items:center; gap:6px;">
+        Whitehall Reply × LUISS
+        <span style="opacity:0.4;">·</span>
+        REPLY_LOGO_PLACEHOLDER
+      </span>
+    </div>
+  </div>
+
+  <!-- ========== HERO ========== -->
+  <div class="hero">
+    <h1>Type a perimeter request — watch the agents work.</h1>
+    <p>The same numerical core as the classical pipeline, wrapped in five LangGraph agents. Free-text input is parsed into a structured perimeter; the four-detector ensemble runs; a deterministic Markdown report is written. The LLM is invoked at exactly two points.</p>
+  </div>
+
+  <!-- ========== QUERY CARD ========== -->
+  <div class="query-card">
+    <div class="query-row">
+      <input type="text" class="query-input" id="queryInput" placeholder="e.g. voli da Tirana · flights from IST · anomalies from Albania · ..." autocomplete="off">
+      <button class="btn btn-primary" id="runBtn" onclick="runPipeline()">
+        Run pipeline
+        <span style="font-size: 18px; line-height: 1;">→</span>
+      </button>
+      <button class="btn btn-ghost" id="resetBtn" onclick="resetAll()">Reset</button>
+    </div>
+    <div class="preset-row">
+      <span class="preset-label">Try:</span>
+      <span class="preset-chip" onclick="setQuery('voli da Tirana')">voli da Tirana</span>
+      <span class="preset-chip" onclick="setQuery('anomalies from IST')">anomalies from IST</span>
+      <span class="preset-chip" onclick="setQuery(\"voli dall'Albania\")">voli dall'Albania</span>
+      <span class="preset-chip bad" onclick="setQuery('flights from KBL')">flights from KBL <em style="font-style:normal; opacity:0.6;">(empty)</em></span>
+      <span class="preset-chip bad" onclick="setQuery('ZZZ')">ZZZ <em style="font-style:normal; opacity:0.6;">(invalid)</em></span>
+    </div>
+  </div>
+
+  <!-- ========== PIPELINE ========== -->
+  <div class="pipeline-card">
+    <h2>Agent pipeline</h2>
+    <div class="pipeline" id="pipeline">
+      <div class="agent-node idle" data-agent="data">
+        <span class="agent-llm-badge">LLM</span>
+        <div class="agent-icon">D</div>
+        <div class="agent-name">Data</div>
+        <div class="agent-task">Parse free-text → perimeter</div>
+      </div>
+      <div class="connector" data-connector="data-baseline"></div>
+      <div class="agent-node idle" data-agent="baseline">
+        <div class="agent-icon">B</div>
+        <div class="agent-name">Baseline</div>
+        <div class="agent-task">Aggregate routes, build features</div>
+      </div>
+      <div class="connector" data-connector="baseline-outlier"></div>
+      <div class="agent-node idle" data-agent="outlier">
+        <div class="agent-icon">O</div>
+        <div class="agent-name">Outlier</div>
+        <div class="agent-task">4-detector ensemble + consensus</div>
+      </div>
+      <div class="connector" data-connector="outlier-risk"></div>
+      <div class="agent-node idle" data-agent="risk">
+        <div class="agent-icon">R</div>
+        <div class="agent-name">Risk</div>
+        <div class="agent-task">Wilson CI + priority + QA</div>
+      </div>
+      <div class="connector" data-connector="risk-report"></div>
+      <div class="agent-node idle" data-agent="report">
+        <span class="agent-llm-badge">LLM</span>
+        <div class="agent-icon">📋</div>
+        <div class="agent-name">Report</div>
+        <div class="agent-task">Markdown report + interpretation</div>
+      </div>
+    </div>
+    <div class="metrics-strip">
+      <div class="metric"><div class="label">Status</div><div class="value dim mono" id="metricStatus" style="font-size:14px;">—</div></div>
+      <div class="metric"><div class="label">Routes analysed</div><div class="value" id="metricRoutes">0</div></div>
+      <div class="metric"><div class="label">Consensus ≥ 2/4</div><div class="value" id="metricConsensus">0</div></div>
+      <div class="metric"><div class="label">Latency (sim)</div><div class="value" id="metricLatency" style="font-size:14px;">—</div></div>
+    </div>
+  </div>
+
+  <!-- ========== TERMINAL LOGS ========== -->
+  <div class="terminal-card">
+    <div class="terminal-head">
+      <div class="terminal-dots"><span></span><span></span><span></span></div>
+      <div class="terminal-title">agent_runner.log · live trace</div>
+    </div>
+    <div class="terminal-body" id="terminal">
+      <div class="terminal-empty">Waiting for input. Type a request above or click a preset to begin.</div>
+    </div>
+  </div>
+
+  <!-- ========== REPORT ========== -->
+  <div class="report-card" id="reportCard">
+    <div class="report-meta">
+      <div>
+        <span class="label" id="reportLabel">Report</span>
+        <div style="font-size:14px; margin-top:4px; color:var(--ink-soft);" id="reportSubtitle">—</div>
+      </div>
+      <div class="timestamp" id="reportTimestamp">—</div>
+    </div>
+    <div class="report-content" id="reportContent">
+      <div class="report-empty">No report yet. Run the pipeline to generate one.</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    Whitehall Reply × LUISS · Project 2 · 2025/26 — Multi-Agent demo runs entirely in the browser. No backend, no real data leaves this page.
+  </div>
+</div>
+
+<script>
+// ============================================================
+// SCENARIOS — realistic data drawn from §4 of the README
+// ============================================================
+const SCENARIOS = {
+  tia: {
+    perimeter: "Tirana / TIA",
+    n_routes: 27,
+    consensus: 1,
+    latency: "0.501s",
+    status: "ready",
+    flow: "full",
+    breakdown: { CRITICAL: 0, HIGH: 1, MEDIUM: 0, LOW: 0 },
+    detectorFlags: { IF: 2, LOF: 1, DBSCAN: 0, Z: 4 },
+    topRoutes: [
+      { route: "TIA → BGY", country: "Italy (Bergamo)", risk: "HIGH", rate: "18.7%", ci: "[18.4%, 19.3%]", priority: "0.508" },
+      { route: "TIA → BLQ", country: "Italy (Bologna)", risk: "MEDIUM", rate: "20.0%", ci: "[19.5%, 20.6%]", priority: "0.508" },
+      { route: "TIA → PSA", country: "Italy (Pisa)",    risk: "MEDIUM", rate: "17.7%", ci: "[17.2%, 18.3%]", priority: "0.491" }
+    ],
+    interpretation: "The Tirana → Bergamo route stands out as a high-priority anomaly: the alert rate is approximately <strong>3× the population median</strong> on a statistically significant volume of investigated transits — the 95% CI half-width is 0.5 percentage points. This combination of elevated rate and tight confidence interval makes the result actionable; the signal is unlikely to be due to small-sample noise.",
+    logs: {
+      data: [
+        { type: 'info', text: "Parsing free-text request: <span class='log-str'>'voli da Tirana'</span>" },
+        { type: 'fallback', text: "Trying explicit IATA token... no match" },
+        { type: 'fallback', text: "Trying city lookup... <span class='log-str'>'Tirana'</span> → IATA <span class='log-str'>'TIA'</span> ✓" },
+        { type: 'info', text: "Filtering ALLARMI on dep_iata = <span class='log-str'>'TIA'</span>... <span class='log-num'>1,243</span> rows" },
+        { type: 'info', text: "Filtering TIPOLOGIA_VIAGGIATORE on dep_iata = <span class='log-str'>'TIA'</span>... <span class='log-num'>567</span> rows" },
+        { type: 'success', text: "Perimeter ready · status=<span class='log-str'>'ready'</span> · routes=<span class='log-num'>27</span>" }
+      ],
+      baseline: [
+        { type: 'info', text: "Aggregating <span class='log-num'>27</span> routes at (departure, arrival) level" },
+        { type: 'info', text: "Building feature matrix: log1p + StandardScaler" },
+        { type: 'success', text: "Feature matrix shape: <span class='log-num'>(27, 31)</span>" }
+      ],
+      outlier: [
+        { type: 'info', text: "Running 4-detector ensemble..." },
+        { type: 'info', text: "  IsolationForest (n_estimators=200)... <span class='log-num'>2</span> flags" },
+        { type: 'info', text: "  LOF (n_neighbors=20)... <span class='log-num'>1</span> flag" },
+        { type: 'info', text: "  DBSCAN (min_samples=5)... <span class='log-num'>0</span> flags · noise rate 1.4%" },
+        { type: 'info', text: "  Robust Z-score (|z| > 3)... <span class='log-num'>4</span> flags" },
+        { type: 'success', text: "Consensus ≥ 2/4: <span class='log-num'>1</span> route" }
+      ],
+      risk: [
+        { type: 'info', text: "Computing Wilson 95% CIs on alert_rate..." },
+        { type: 'info', text: "Assigning risk levels (T_HIGH, T_MED, T_VOL)..." },
+        { type: 'info', text: "Computing priority = (0.60·rate_n + 0.40·log_alarms_n) × ci_tightness" },
+        { type: 'info', text: "QA filter: <span class='log-num'>1</span> → <span class='log-num'>1</span> routes (<span class='log-num'>0</span> disqualified)" },
+        { type: 'success', text: "Risk breakdown · <span class='log-num'>0</span> CRITICAL · <span class='log-num'>1</span> HIGH · <span class='log-num'>0</span> MEDIUM · <span class='log-num'>0</span> LOW" }
+      ],
+      report: [
+        { type: 'info', text: "Building deterministic Markdown report..." },
+        { type: 'info', text: "Calling LLM (<span class='log-str'>llama3.2:3b</span>) for interpretation paragraph..." },
+        { type: 'info', text: "  temperature=0 · seed=42 · max_tokens=200" },
+        { type: 'success', text: "Report generated · markdown 1,240 chars · interpretation 4 sentences" }
+      ]
+    }
+  },
+
+  ist: {
+    perimeter: "Istanbul / IST",
+    n_routes: 12,
+    consensus: 1,
+    latency: "0.487s",
+    status: "ready",
+    flow: "full",
+    breakdown: { CRITICAL: 0, HIGH: 1, MEDIUM: 0, LOW: 0 },
+    detectorFlags: { IF: 1, LOF: 2, DBSCAN: 1, Z: 3 },
+    topRoutes: [
+      { route: "IST → CTA", country: "Italy (Catania)", risk: "HIGH", rate: "78.3%", ci: "[67.6%, 100.0%]", priority: "0.476" },
+      { route: "IST → VCE", country: "Italy (Venice)",  risk: "HIGH", rate: "72.1%", ci: "[58.1%, 90.3%]", priority: "0.413" }
+    ],
+    interpretation: "The Istanbul → Catania route shows a markedly elevated alert rate that is <strong>nearly 5× the population median</strong>, but on a smaller sample than the top Tirana routes. The CI half-width is approximately 16 percentage points, which the priority score down-weights through the <code>ci_tightness</code> factor. The signal is real but warrants continued observation as more transits accumulate.",
+    logs: {
+      data: [
+        { type: 'info', text: "Parsing free-text request: <span class='log-str'>'anomalies from IST'</span>" },
+        { type: 'fallback', text: "Explicit IATA token detected: <span class='log-str'>'IST'</span> ✓" },
+        { type: 'info', text: "Filtering ALLARMI on dep_iata = <span class='log-str'>'IST'</span>... <span class='log-num'>982</span> rows" },
+        { type: 'info', text: "Filtering TIPOLOGIA_VIAGGIATORE on dep_iata = <span class='log-str'>'IST'</span>... <span class='log-num'>421</span> rows" },
+        { type: 'success', text: "Perimeter ready · status=<span class='log-str'>'ready'</span> · routes=<span class='log-num'>12</span>" }
+      ],
+      baseline: [
+        { type: 'info', text: "Aggregating <span class='log-num'>12</span> routes at (departure, arrival) level" },
+        { type: 'info', text: "Building feature matrix: log1p + StandardScaler" },
+        { type: 'success', text: "Feature matrix shape: <span class='log-num'>(12, 31)</span>" }
+      ],
+      outlier: [
+        { type: 'info', text: "Running 4-detector ensemble..." },
+        { type: 'info', text: "  IsolationForest... <span class='log-num'>1</span> flag" },
+        { type: 'info', text: "  LOF (n_neighbors=11, clipped)... <span class='log-num'>2</span> flags" },
+        { type: 'info', text: "  DBSCAN... <span class='log-num'>1</span> flag" },
+        { type: 'info', text: "  Robust Z-score... <span class='log-num'>3</span> flags" },
+        { type: 'success', text: "Consensus ≥ 2/4: <span class='log-num'>1</span> route" }
+      ],
+      risk: [
+        { type: 'info', text: "Computing Wilson 95% CIs on alert_rate..." },
+        { type: 'info', text: "Assigning risk levels..." },
+        { type: 'info', text: "Computing priority scores..." },
+        { type: 'info', text: "QA filter: <span class='log-num'>1</span> → <span class='log-num'>1</span> routes (<span class='log-num'>0</span> disqualified)" },
+        { type: 'success', text: "Risk breakdown · <span class='log-num'>0</span> CRITICAL · <span class='log-num'>1</span> HIGH · <span class='log-num'>0</span> MEDIUM · <span class='log-num'>0</span> LOW" }
+      ],
+      report: [
+        { type: 'info', text: "Building deterministic Markdown report..." },
+        { type: 'info', text: "Calling LLM (<span class='log-str'>llama3.2:3b</span>) for interpretation paragraph..." },
+        { type: 'success', text: "Report generated · markdown 1,082 chars" }
+      ]
+    }
+  },
+
+  kbl: {
+    perimeter: "Kabul / KBL",
+    n_routes: 8,
+    consensus: 0,
+    latency: "0.111s",
+    status: "empty_perimeter",
+    flow: "graceful",
+    interpretation: "The selected perimeter (departures from <strong>Kabul, IATA: KBL</strong>) contains <span class='mono'>8</span> traveler records but <strong>zero alarm events</strong> in the available window. No consensus anomalies can be computed without alarm data — the conditional edge after the Data agent skipped the entire detection layer and routed directly to the Report agent, which produced this graceful fallback. The pipeline executed successfully and emitted a structured deliverable in <span class='mono'>0.111s</span>.",
+    logs: {
+      data: [
+        { type: 'info', text: "Parsing free-text request: <span class='log-str'>'flights from KBL'</span>" },
+        { type: 'fallback', text: "Explicit IATA token detected: <span class='log-str'>'KBL'</span> ✓" },
+        { type: 'info', text: "Filtering ALLARMI on dep_iata = <span class='log-str'>'KBL'</span>... <span class='log-num'>0</span> rows" },
+        { type: 'info', text: "Filtering TIPOLOGIA_VIAGGIATORE on dep_iata = <span class='log-str'>'KBL'</span>... <span class='log-num'>8</span> rows" },
+        { type: 'warn', text: "Perimeter has <span class='log-num'>8</span> transits but <span class='log-num'>0</span> alarms" },
+        { type: 'info', text: "status=<span class='log-str'>'empty_perimeter'</span>" },
+        { type: 'conditional', text: "[CONDITIONAL EDGE] empty_perimeter → skip detection layer → graceful Report" }
+      ],
+      report: [
+        { type: 'info', text: "Building 'no actionable data' report..." },
+        { type: 'success', text: "Graceful fallback report generated · pipeline did not block" }
+      ]
+    }
+  },
+
+  invalid: {
+    perimeter: "Invalid input",
+    n_routes: 0,
+    consensus: 0,
+    latency: "0.094s",
+    status: "invalid_input",
+    flow: "error",
+    interpretation: "The request <code>ZZZ</code> could not be parsed into a valid perimeter — no IATA code, city name, or country name was recognised by the deterministic fallbacks, and the LLM fallback also failed to return a parsable perimeter. The Data agent emitted <code>status='invalid_input'</code> and the conditional edge routed directly to the Report agent, which produced this error report instead of failing the pipeline.",
+    logs: {
+      data: [
+        { type: 'info', text: "Parsing free-text request: <span class='log-str'>'ZZZ'</span>" },
+        { type: 'error', text: "No IATA token match" },
+        { type: 'error', text: "No city lookup match" },
+        { type: 'error', text: "No country name match" },
+        { type: 'error', text: "LLM fallback could not parse — no actionable perimeter" },
+        { type: 'conditional', text: "[CONDITIONAL EDGE] invalid_input → graceful Report" }
+      ],
+      report: [
+        { type: 'info', text: "Building 'invalid input' report with usage hints..." },
+        { type: 'success', text: "Error report generated · pipeline did not crash" }
+      ]
+    }
+  }
+};
+
+// ============================================================
+// SCENARIO MATCHING (deterministic fallback chain — same logic as the real Data Agent)
+// ============================================================
+function matchScenario(query) {
+  const q = query.toLowerCase().trim();
+  if (!q) return null;
+
+  // 1. Explicit IATA tokens (3 uppercase letters)
+  const iata = q.match(/\\b([a-z]{3})\\b/g);
+  if (iata) {
+    if (iata.includes('tia')) return SCENARIOS.tia;
+    if (iata.includes('ist')) return SCENARIOS.ist;
+    if (iata.includes('kbl')) return SCENARIOS.kbl;
+    if (iata.includes('zzz') || iata.includes('qqq') || iata.includes('xxx')) return SCENARIOS.invalid;
+  }
+
+  // 2. City lookup
+  if (/tirana/.test(q)) return SCENARIOS.tia;
+  if (/istanbul/.test(q)) return SCENARIOS.ist;
+  if (/kabul/.test(q)) return SCENARIOS.kbl;
+
+  // 3. Country lookup
+  if (/albania/.test(q)) return SCENARIOS.tia;     // TIA is the only Albanian airport
+  if (/turchia|turkey/.test(q)) return SCENARIOS.ist;
+  if (/afghanistan/.test(q)) return SCENARIOS.kbl;
+
+  // 4. Default invalid for very short or unknown
+  if (q.length < 3) return SCENARIOS.invalid;
+
+  // 5. Unknown but plausible — invalid
+  return SCENARIOS.invalid;
+}
+
+// ============================================================
+// UI HELPERS
+// ============================================================
+const $ = (id) => document.getElementById(id);
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+function setQuery(text) {
+  $('queryInput').value = text;
+  $('queryInput').focus();
+}
+
+function resetAll() {
+  $('queryInput').value = '';
+  document.querySelectorAll('.agent-node').forEach(n => {
+    n.classList.remove('active', 'done', 'skipped', 'error');
+    n.classList.add('idle');
+  });
+  document.querySelectorAll('.connector').forEach(c => {
+    c.classList.remove('flow', 'done', 'skipped');
+  });
+  $('terminal').innerHTML = '<div class="terminal-empty">Waiting for input. Type a request above or click a preset to begin.</div>';
+  const reportCard = $('reportCard');
+  reportCard.classList.remove('visible');
+  $('reportContent').innerHTML = '<div class="report-empty">No report yet. Run the pipeline to generate one.</div>';
+  $('reportLabel').textContent = 'Report';
+  $('reportLabel').className = 'label';
+  $('reportSubtitle').textContent = '—';
+  $('reportTimestamp').textContent = '—';
+  $('metricStatus').textContent = '—';
+  $('metricRoutes').textContent = '0';
+  $('metricConsensus').textContent = '0';
+  $('metricLatency').textContent = '—';
+  $('metricRoutes').classList.add('dim');
+  $('metricConsensus').classList.add('dim');
+  $('runBtn').disabled = false;
+  $('runBtn').innerHTML = 'Run pipeline <span style="font-size: 18px; line-height: 1;">→</span>';
+  document.querySelector('.status-pill').textContent = 'Idle';
+}
+
+function setStatus(text) {
+  document.querySelector('.status-pill').textContent = text;
+}
+
+function appendLog(agentName, line) {
+  const term = $('terminal');
+  if (term.querySelector('.terminal-empty')) term.innerHTML = '';
+  const div = document.createElement('div');
+  div.className = `log-line log-${line.type}`;
+  const tag = `<span class="log-agent">${agentName}</span>`;
+  const prefix = {
+    'info': '[INFO]',
+    'success': '[OK]',
+    'warn': '[WARN]',
+    'error': '[ERROR]',
+    'fallback': '[FALLBACK]',
+    'conditional': ''
+  }[line.type] || '[INFO]';
+  const prefixSpan = line.type === 'conditional' ? '' : `<span class="log-${line.type}">${prefix}</span> `;
+  div.innerHTML = tag + prefixSpan + line.text;
+  term.appendChild(div);
+  term.scrollTop = term.scrollHeight;
+}
+
+function appendBlankLine() {
+  const term = $('terminal');
+  const div = document.createElement('div');
+  div.className = 'log-line';
+  div.innerHTML = '&nbsp;';
+  term.appendChild(div);
+}
+
+function appendBootLine(text) {
+  const term = $('terminal');
+  if (term.querySelector('.terminal-empty')) term.innerHTML = '';
+  const div = document.createElement('div');
+  div.className = 'log-line log-prompt';
+  div.innerHTML = `<span style="color:var(--term-fg)">${text}</span>`;
+  term.appendChild(div);
+  term.scrollTop = term.scrollHeight;
+}
+
+function setAgentState(name, state) {
+  const node = document.querySelector(`.agent-node[data-agent="${name}"]`);
+  node.classList.remove('idle', 'active', 'done', 'skipped', 'error');
+  node.classList.add(state);
+}
+
+function setConnectorState(from, to, state) {
+  const c = document.querySelector(`.connector[data-connector="${from}-${to}"]`);
+  if (c) {
+    c.classList.remove('flow', 'done', 'skipped');
+    c.classList.add(state);
+  }
+}
+
+function updateMetrics(scenario) {
+  const statusMap = {
+    'ready': 'ready',
+    'empty_perimeter': 'empty_perimeter',
+    'invalid_input': 'invalid_input'
+  };
+  $('metricStatus').textContent = statusMap[scenario.status] || '—';
+  $('metricStatus').classList.remove('dim');
+  $('metricRoutes').textContent = scenario.n_routes;
+  if (scenario.n_routes > 0) $('metricRoutes').classList.remove('dim');
+  $('metricConsensus').textContent = scenario.consensus;
+  if (scenario.consensus > 0) $('metricConsensus').classList.remove('dim');
+  $('metricLatency').textContent = scenario.latency;
+}
+
+// ============================================================
+// REPORT RENDERING
+// ============================================================
+function renderReport(scenario) {
+  const card = $('reportCard');
+  const content = $('reportContent');
+  const label = $('reportLabel');
+  const subtitle = $('reportSubtitle');
+  const ts = $('reportTimestamp');
+
+  ts.textContent = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
+
+  if (scenario.status === 'ready') {
+    label.textContent = 'Anomaly report · ' + scenario.status;
+    label.className = 'label success';
+    subtitle.textContent = `Perimeter: ${scenario.perimeter} · ${scenario.n_routes} routes · ${scenario.consensus} consensus anomaly`;
+
+    const breakdownStr = Object.entries(scenario.breakdown)
+      .filter(([k,v]) => v > 0)
+      .map(([k,v]) => `${v} ${k}`)
+      .join(' · ') || '—';
+
+    let table = '<table><thead><tr><th>Route</th><th>Country</th><th>Risk</th><th>Alert rate (95% CI)</th><th>Priority</th></tr></thead><tbody>';
+    scenario.topRoutes.forEach(r => {
+      table += `<tr><td class="mono">${r.route}</td><td>${r.country}</td><td><span class="risk-pill ${r.risk}">${r.risk}</span></td><td><span class="mono">${r.rate} ${r.ci}</span></td><td class="mono">${r.priority}</td></tr>`;
+    });
+    table += '</tbody></table>';
+
+    content.innerHTML = `
+      <h1>Transit Anomaly Report — ${scenario.perimeter}</h1>
+      <p><strong>Routes analysed:</strong> <span class="mono">${scenario.n_routes}</span> · <strong>Consensus anomalies:</strong> <span class="mono">${scenario.consensus}</span> · <strong>Risk breakdown:</strong> ${breakdownStr}</p>
+      <h2>Top routes by priority</h2>
+      ${table}
+      <div class="interpretation"><p>${scenario.interpretation}</p></div>
+      <p class="footnote">Numbers above are deterministic and reproducible across runs. The interpretation paragraph is generated by <code>llama3.2:3b</code> with <code>temperature=0</code> and a fixed seed; minor wording variations may occur but the facts cited (rate, CI, priority) come straight from the upstream agents.</p>
+    `;
+  } else if (scenario.status === 'empty_perimeter') {
+    label.textContent = scenario.status;
+    label.className = 'label warn';
+    subtitle.textContent = `Perimeter: ${scenario.perimeter} · graceful fallback`;
+    content.innerHTML = `
+      <h1>Transit Anomaly Report — ${scenario.perimeter}</h1>
+      <p><strong>Status:</strong> <code>empty_perimeter</code> — no actionable data in the available window.</p>
+      <div class="interpretation"><p>${scenario.interpretation}</p></div>
+      <p class="footnote">The conditional edge after the Data agent skipped the entire detection layer; only Data and Report agents executed.</p>
+    `;
+  } else if (scenario.status === 'invalid_input') {
+    label.textContent = scenario.status;
+    label.className = 'label error';
+    subtitle.textContent = 'Input could not be parsed';
+    content.innerHTML = `
+      <h1>Transit Anomaly Report — Invalid input</h1>
+      <p><strong>Status:</strong> <code>invalid_input</code></p>
+      <div class="interpretation"><p>${scenario.interpretation}</p></div>
+      <h2>Supported input patterns</h2>
+      <ul style="margin-left:20px; font-size:14px; line-height:1.7;">
+        <li>IATA code: <code>flights from IST</code>, <code>anomalies from TIA</code></li>
+        <li>City name: <code>voli da Tirana</code>, <code>flights from Istanbul</code></li>
+        <li>Country name: <code>voli dall'Albania</code>, <code>anomalies from Turchia</code></li>
+        <li>Empty input → full perimeter (1,100 routes)</li>
+      </ul>
+      <p class="footnote">Even on invalid input, the pipeline produces a structured deliverable rather than crashing.</p>
+    `;
+  }
+
+  card.classList.add('visible');
+}
+
+// ============================================================
+// MAIN PIPELINE RUNNER
+// ============================================================
+async function runPipeline() {
+  const query = $('queryInput').value.trim();
+  if (!query) {
+    $('queryInput').focus();
+    return;
+  }
+  const scenario = matchScenario(query);
+  if (!scenario) return;
+
+  // Reset visual state but keep input
+  document.querySelectorAll('.agent-node').forEach(n => {
+    n.classList.remove('active', 'done', 'skipped', 'error');
+    n.classList.add('idle');
+  });
+  document.querySelectorAll('.connector').forEach(c => {
+    c.classList.remove('flow', 'done', 'skipped');
+  });
+  $('terminal').innerHTML = '';
+  $('reportCard').classList.remove('visible');
+  $('reportContent').innerHTML = '<div class="report-empty">Pipeline running...</div>';
+  $('runBtn').disabled = true;
+  $('runBtn').innerHTML = '<span style="opacity:0.7;">Running...</span>';
+  setStatus('Running');
+
+  // Boot line
+  appendBootLine(`run_pipeline --request "${query}"`);
+  appendBlankLine();
+  await sleep(450);
+
+  // ============== DATA AGENT ==============
+  setAgentState('data', 'active');
+  for (const log of scenario.logs.data) {
+    appendLog('data', log);
+    await sleep(180 + Math.random() * 140);
+  }
+  await sleep(250);
+
+  if (scenario.flow === 'error') {
+    setAgentState('data', 'error');
+    setConnectorState('data', 'baseline', 'skipped');
+    setConnectorState('baseline', 'outlier', 'skipped');
+    setConnectorState('outlier', 'risk', 'skipped');
+    setConnectorState('risk', 'report', 'skipped');
+    document.querySelectorAll('.agent-node').forEach(n => {
+      const a = n.dataset.agent;
+      if (['baseline','outlier','risk'].includes(a)) {
+        n.classList.remove('idle');
+        n.classList.add('skipped');
+      }
+    });
+    appendBlankLine();
+    setAgentState('report', 'active');
+    for (const log of scenario.logs.report) {
+      appendLog('report', log);
+      await sleep(220 + Math.random() * 120);
+    }
+    setAgentState('report', 'done');
+    setConnectorState('risk', 'report', 'skipped');
+    updateMetrics(scenario);
+    await sleep(300);
+    renderReport(scenario);
+    appendBlankLine();
+    appendBootLine(`pipeline finished · status=invalid_input · latency=${scenario.latency}`);
+    setStatus('Done');
+    $('runBtn').disabled = false;
+    $('runBtn').innerHTML = 'Run pipeline <span style="font-size: 18px; line-height: 1;">→</span>';
+    return;
+  }
+
+  if (scenario.flow === 'graceful') {
+    setAgentState('data', 'done');
+    setConnectorState('data', 'baseline', 'skipped');
+    setConnectorState('baseline', 'outlier', 'skipped');
+    setConnectorState('outlier', 'risk', 'skipped');
+    setConnectorState('risk', 'report', 'skipped');
+    document.querySelectorAll('.agent-node').forEach(n => {
+      const a = n.dataset.agent;
+      if (['baseline','outlier','risk'].includes(a)) {
+        n.classList.remove('idle');
+        n.classList.add('skipped');
+      }
+    });
+    appendBlankLine();
+    setAgentState('report', 'active');
+    for (const log of scenario.logs.report) {
+      appendLog('report', log);
+      await sleep(220 + Math.random() * 120);
+    }
+    setAgentState('report', 'done');
+    updateMetrics(scenario);
+    await sleep(300);
+    renderReport(scenario);
+    appendBlankLine();
+    appendBootLine(`pipeline finished · status=empty_perimeter · latency=${scenario.latency}`);
+    setStatus('Done');
+    $('runBtn').disabled = false;
+    $('runBtn').innerHTML = 'Run pipeline <span style="font-size: 18px; line-height: 1;">→</span>';
+    return;
+  }
+
+  // ============== FULL FLOW ==============
+  setAgentState('data', 'done');
+  setConnectorState('data', 'baseline', 'flow');
+  await sleep(180);
+  setConnectorState('data', 'baseline', 'done');
+  appendBlankLine();
+
+  setAgentState('baseline', 'active');
+  for (const log of scenario.logs.baseline) {
+    appendLog('baseline', log);
+    await sleep(180 + Math.random() * 120);
+  }
+  await sleep(180);
+  setAgentState('baseline', 'done');
+  setConnectorState('baseline', 'outlier', 'flow');
+  await sleep(180);
+  setConnectorState('baseline', 'outlier', 'done');
+  appendBlankLine();
+
+  setAgentState('outlier', 'active');
+  for (const log of scenario.logs.outlier) {
+    appendLog('outlier', log);
+    await sleep(180 + Math.random() * 140);
+  }
+  await sleep(180);
+  setAgentState('outlier', 'done');
+  setConnectorState('outlier', 'risk', 'flow');
+  await sleep(180);
+  setConnectorState('outlier', 'risk', 'done');
+  appendBlankLine();
+
+  setAgentState('risk', 'active');
+  for (const log of scenario.logs.risk) {
+    appendLog('risk', log);
+    await sleep(180 + Math.random() * 130);
+  }
+  await sleep(180);
+  setAgentState('risk', 'done');
+  setConnectorState('risk', 'report', 'flow');
+  await sleep(180);
+  setConnectorState('risk', 'report', 'done');
+  appendBlankLine();
+
+  setAgentState('report', 'active');
+  for (const log of scenario.logs.report) {
+    appendLog('report', log);
+    await sleep(220 + Math.random() * 140);
+  }
+  setAgentState('report', 'done');
+
+  updateMetrics(scenario);
+  await sleep(350);
+  renderReport(scenario);
+  appendBlankLine();
+  appendBootLine(`pipeline finished · status=ready · latency=${scenario.latency}`);
+  setStatus('Done');
+  $('runBtn').disabled = false;
+  $('runBtn').innerHTML = 'Run again <span style="font-size: 18px; line-height: 1;">↻</span>';
+}
+
+// ============================================================
+// KEYBOARD SHORTCUTS
+// ============================================================
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && document.activeElement === $('queryInput')) {
+    runPipeline();
+  }
+  if (e.key === 'Escape') {
+    resetAll();
+  }
+});
+
+// Focus input on load
+window.addEventListener('load', () => {
+  $('queryInput').focus();
+});
+</script>
+</body>
+</html>
